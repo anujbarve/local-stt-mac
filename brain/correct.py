@@ -132,6 +132,39 @@ class CorrectionLogger:
         self.buffer.clear()
         self._save_buffer()
 
+    def maybe_retrain(
+        self,
+        trainer: "BrainTrainer",
+        min_corrections: int = MIN_CORRECTIONS_FOR_RETRAIN,
+        head_only: bool = True,
+    ) -> bool:
+        """Check if enough corrections accumulated, then retrain.
+
+        Args:
+            trainer: BrainTrainer instance from brain.train
+            min_corrections: threshold to trigger retraining
+            head_only: if True, retrain only the classifier head (fast)
+
+        Returns True if retraining was triggered.
+        """
+        if not self.should_retrain(min_corrections):
+            return False
+
+        data = self.get_training_data(min_corrections)
+        if not data:
+            return False
+
+        if head_only:
+            trainer.retrain_head("classifier", data, epochs=5)
+        else:
+            trainer.retrain_all(data, epochs=10)
+
+        # Mark as applied
+        indices = [i for i, c in enumerate(self.buffer) if not c.applied]
+        self.mark_applied(indices)
+
+        return True
+
     def _load_buffer(self) -> None:
         """Load corrections from JSONL file."""
         if not os.path.exists(self.buffer_path):

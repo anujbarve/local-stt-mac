@@ -131,11 +131,50 @@ class BrainEngine:
 
         return understanding
 
+    @torch.no_grad()
     def understand_batch(
-        self, texts: List[str]
+        self, texts: List[str], batch_size: int = 32
     ) -> List[Understanding]:
-        """Batch inference for efficiency."""
-        return [self.understand(text) for text in texts]
+        """Batch inference with proper batching for efficiency.
+
+        Groups texts into batches, runs single forward pass per batch.
+        Much faster than calling understand() in a loop.
+        """
+        results = []
+        for start in range(0, len(texts), batch_size):
+            batch_texts = texts[start:start + batch_size]
+
+            # Tokenize batch
+            batch_ids = []
+            for text in batch_texts:
+                ids = self.tokenizer.encode(text, add_special=True)
+                batch_ids.append(ids)
+
+            token_tensor = torch.tensor(batch_ids, dtype=torch.long)
+            outputs = self.model(token_tensor)
+
+            # Decode each result
+            for i, text in enumerate(batch_texts):
+                single_outputs = {k: v[i:i+1] if isinstance(v, torch.Tensor) else v
+                                  for k, v in outputs.items()}
+                understanding = self._decode_outputs(text, single_outputs)
+
+                # Embedding
+                try:
+                    understanding.embedding = self.embedder.embed(text)
+                except Exception:
+                    understanding.embedding = None
+
+                # Entity linking
+                for entity in understanding.entities:
+                    resolved = self.entity_linker.resolve(entity)
+                    if resolved:
+                        entity.attributes["vault_page"] = resolved
+
+                understanding.confidence = self._compute_confidence(single_outputs)
+                results.append(understanding)
+
+        return results
 
     def should_call_llm(self, understanding: Understanding) -> bool:
         """
