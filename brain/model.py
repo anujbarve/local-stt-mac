@@ -174,3 +174,51 @@ class BrainModel(nn.Module):
                 except Exception:
                     continue
         return versions
+
+    @classmethod
+    def load_with_retry(
+        cls,
+        path: str,
+        max_retries: int = 3,
+        backoff_factor: float = 1.0,
+    ) -> "BrainModel":
+        """Load model with exponential backoff retry.
+
+        Args:
+            path: Path to checkpoint file.
+            max_retries: Maximum number of retry attempts.
+            backoff_factor: Multiplier for backoff delay.
+
+        Returns:
+            Loaded BrainModel.
+
+        Raises:
+            RuntimeError: If all retries fail.
+        """
+        import time as _time
+        import logging
+
+        logger = logging.getLogger(__name__)
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                return cls.load(path)
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    delay = backoff_factor * (2 ** attempt)
+                    logger.warning(
+                        "Model load attempt %d/%d failed: %s. Retrying in %.1fs...",
+                        attempt + 1, max_retries, e, delay,
+                    )
+                    _time.sleep(delay)
+                else:
+                    logger.error(
+                        "Model load failed after %d attempts: %s",
+                        max_retries, e,
+                    )
+
+        raise RuntimeError(
+            f"Failed to load model from {path} after {max_retries} attempts: {last_error}"
+        )

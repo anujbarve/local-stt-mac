@@ -56,6 +56,7 @@ def main():
     # export
     p_export = subparsers.add_parser("export")
     p_export.add_argument("--onnx", action="store_true", help="Export to ONNX format")
+    p_export.add_argument("--all", action="store_true", help="Export ONNX + TorchScript + model card")
     p_export.add_argument("--output", help="Output path")
     p_export.add_argument("--versions", action="store_true", help="List model versions")
     p_export.add_argument("--checkpoint", default="checkpoints/brain")
@@ -210,7 +211,7 @@ def cmd_evaluate(args):
 
 
 def cmd_export(args):
-    """Export model to ONNX or list versions."""
+    """Export model to ONNX, TorchScript, or list versions."""
     if args.versions:
         from brain.model import BrainModel
         versions = BrainModel.load_versions(args.checkpoint)
@@ -221,12 +222,31 @@ def cmd_export(args):
         return
 
     from brain.understand import BrainEngine
-    from brain.train import export_onnx
 
     engine = BrainEngine.load(args.checkpoint)
-    output = args.output or os.path.join(args.checkpoint, "model.onnx")
-    export_onnx(engine.model, engine.tokenizer, output)
-    print(f"Model exported to {output}")
+
+    if args.all:
+        # Full export: ONNX + TorchScript + model card
+        from brain.export import ModelExporter
+        exporter = ModelExporter(engine)
+        output_dir = args.output or os.path.join(args.checkpoint, "exports")
+        artifacts = exporter.export_all(output_dir)
+        print("Exported artifacts:")
+        for art_type, path in artifacts.items():
+            print(f"  {art_type}: {path}")
+    elif args.onnx:
+        output = args.output or os.path.join(args.checkpoint, "model.onnx")
+        from brain.export import ModelExporter
+        exporter = ModelExporter(engine)
+        exporter.export_onnx(output)
+        print(f"ONNX exported to {output}")
+    else:
+        # Default: ONNX only
+        output = args.output or os.path.join(args.checkpoint, "model.onnx")
+        from brain.export import ModelExporter
+        exporter = ModelExporter(engine)
+        exporter.export_onnx(output)
+        print(f"Model exported to {output}")
 
 
 def cmd_corrections(args):

@@ -177,6 +177,13 @@ class BrainEngine:
         # Confidence calibration
         self.temperature = 1.0
 
+        # Inference cache
+        self._cache: Dict[str, Understanding] = {}
+        self._cache_enabled = True
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._cache_max_size = 512
+
     def calibrate(
         self,
         val_data: List[Dict],
@@ -225,29 +232,111 @@ class BrainEngine:
         self.temperature = best_temp
         return best_temp
 
+    # ------------------------------------------------------------------
+    # Inference cache
+    # ------------------------------------------------------------------
+
+    def _get_cached(self, text: str) -> Optional[Understanding]:
+        """Get cached understanding for text."""
+        return self._cache.get(text)
+
+    def _set_cache(self, text: str, understanding: Understanding) -> None:
+        """Cache an understanding result."""
+        if len(self._cache) >= self._cache_max_size:
+            # Evict oldest entry
+            oldest_key = next(iter(self._cache))
+            del self._cache[oldest_key]
+        self._cache[text] = understanding
+
+    def cache_stats(self) -> Dict[str, Any]:
+        """Return cache statistics."""
+        total = self._cache_hits + self._cache_misses
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "hit_rate": round(self._cache_hits / total, 4) if total > 0 else 0,
+            "size": len(self._cache),
+            "max_size": self._cache_max_size,
+            "enabled": self._cache_enabled,
+        }
+
+    def clear_cache(self) -> None:
+        """Clear inference cache."""
+        self._cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    def set_cache_enabled(self, enabled: bool) -> None:
+        """Enable or disable caching."""
+        self._cache_enabled = enabled
+        if not enabled:
+            self.clear_cache()
+
+    # ------------------------------------------------------------------
+    # Health check
+    # ------------------------------------------------------------------
+
+    def health(self) -> Dict[str, Any]:
+        """Check brain engine health.
+
+        Returns:
+            {
+                "status": "healthy",
+                "model_loaded": True,
+                "tokenizer_ready": True,
+                "temperature": 1.0,
+                "cache_stats": {...},
+                "device": "cpu",
+            }
+        """
+        model_ok = self.model is not None
+        tokenizer_ok = self.tokenizer is not None
+
+        status = "healthy" if (model_ok and tokenizer_ok) else "degraded"
+
+        return {
+            "status": status,
+            "model_loaded": model_ok,
+            "tokenizer_ready": tokenizer_ok,
+            "temperature": self.temperature,
+            "cache_stats": self.cache_stats(),
+            "device": str(next(self.model.parameters()).device) if model_ok else "unknown",
+            "parameters": self.model.count_parameters() if model_ok else 0,
+        }
+
+    # ------------------------------------------------------------------
+    # Inference
+    # ------------------------------------------------------------------
+
     @torch.no_grad()
     def understand(
         self,
         text: str,
         context: Optional[List[Dict]] = None,
+        use_cache: bool = True,
     ) -> Understanding:
         """
-        Full understanding pipeline.
-
-        1. Tokenize text
-        2. Run through model (all heads)
-        3. Decode predictions
-        4. Generate embedding
-        5. Link entities to vault
-        6. Return Understanding object
+        Full understanding pipeline with optional caching.
 
         Args:
             text: Input text (transcription).
             context: Optional list of recent notes for context.
+            use_cache: Whether to use inference cache.
 
         Returns:
             Understanding object with all fields populated.
         """
+        # Check cache
+        if use_cache and self._cache_enabled:
+            cached = self._get_cached(text)
+            if cached is not None:
+                self._cache_hits += 1
+                return cached
+
+        # Track misses only when cache is enabled
+        if self._cache_enabled:
+            self._cache_misses += 1
+
         # 1. Tokenize
         token_ids = self.tokenizer.encode(text, add_special=True)
         token_tensor = torch.tensor([token_ids], dtype=torch.long)
@@ -272,6 +361,10 @@ class BrainEngine:
 
         # 6. Set confidence from model
         understanding.confidence = self._compute_confidence(outputs)
+
+        # Cache result
+        if use_cache and self._cache_enabled:
+            self._set_cache(text, understanding)
 
         return understanding
 

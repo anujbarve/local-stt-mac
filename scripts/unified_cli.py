@@ -195,6 +195,175 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Intelligence commands (brain modules)
+# ---------------------------------------------------------------------------
+
+def cmd_brain_temporal(args: argparse.Namespace) -> None:
+    """Parse temporal information from text."""
+    from brain.temporal import TemporalReasoner
+    reasoner = TemporalReasoner()
+    result = reasoner.parse(args.text)
+    print(json.dumps({
+        "has_time": result.has_time,
+        "deadline": result.deadline.isoformat() if result.deadline else None,
+        "relative": result.relative,
+        "recurring": result.recurring,
+        "confidence": result.confidence,
+        "raw_expression": result.raw_expression,
+    }, indent=2))
+
+
+def cmd_brain_cluster(args: argparse.Namespace) -> None:
+    """Cluster notes by topic."""
+    from vault.reader import VaultReader
+    from brain.clustering import TopicClusterer
+
+    reader = VaultReader(args.vault_path)
+    notes = reader.read_all()
+    clusterer = TopicClusterer()
+    clusters = clusterer.cluster(notes)
+
+    for c in clusters:
+        print(f"  [{c.id}] {c.label} ({c.size} notes)")
+
+
+def cmd_brain_insights(args: argparse.Namespace) -> None:
+    """Generate insights from vault notes."""
+    from vault.reader import VaultReader
+    from brain.insights import InsightGenerator
+
+    reader = VaultReader(args.vault_path)
+    notes = reader.read_all()
+    gen = InsightGenerator()
+    insights = gen.daily_insights(notes)
+
+    if not insights:
+        print("No insights generated.")
+        return
+
+    for i in insights:
+        severity_icon = {"info": "ℹ️", "warning": "⚠️", "action": "🔴"}.get(i.severity, "•")
+        print(f"  {severity_icon} [{i.type}] {i.message}")
+
+
+def cmd_brain_recommend(args: argparse.Namespace) -> None:
+    """Recommend related notes."""
+    from vault.reader import VaultReader
+    from brain.recommend import RecommendationEngine
+
+    reader = VaultReader(args.vault_path)
+    notes = reader.read_all()
+    engine = RecommendationEngine()
+
+    if args.stale:
+        stale = engine.find_stale_projects(notes)
+        if not stale:
+            print("No stale projects found.")
+        for s in stale:
+            print(f"  📦 {s['project']} — {s['days_stale']} days stale")
+    else:
+        # Find note by ID or use first note
+        target = None
+        for n in notes:
+            if str(n.get("id", n.get("note_id", ""))) == args.note_id:
+                target = n
+                break
+        if not target and notes:
+            target = notes[0]
+        if not target:
+            print("No notes found.")
+            return
+        recs = engine.recommend_related(target, notes)
+        for r in recs:
+            print(f"  [{r['relevance']:.2f}] {r['text'][:60]}  ({r['reason']})")
+
+
+def cmd_vault_schedule(args: argparse.Namespace) -> None:
+    """Show scheduled tasks."""
+    from vault.reader import VaultReader
+    from brain.temporal import TemporalReasoner
+
+    reader = VaultReader(args.vault_path)
+    notes = reader.read_all()
+    reasoner = TemporalReasoner()
+
+    # Extract tasks with deadlines
+    task_notes = []
+    for n in notes:
+        text = n.get("body", n.get("text", ""))
+        result = reasoner.parse(text)
+        if result.has_time and result.deadline:
+            task_notes.append({
+                "id": n.get("id", n.get("note_id", "")),
+                "text": text[:80],
+                "deadline": result.deadline.isoformat(),
+                "priority": n.get("priority", 0.5),
+                "urgency": n.get("urgency", "later"),
+            })
+
+    schedule = reasoner.suggest_schedule(task_notes)
+    if not schedule:
+        print("No scheduled tasks found.")
+        return
+
+    print(f"Schedule ({len(schedule)} items):\n")
+    for item in schedule:
+        print(f"  {item.suggested_time}  [{item.priority:.2f}] {item.title[:50]}")
+        print(f"           deadline: {item.deadline.strftime('%Y-%m-%d %H:%M')}")
+
+
+def cmd_vault_digest(args: argparse.Namespace) -> None:
+    """Generate daily/weekly digest."""
+    from vault.reader import VaultReader
+    from vault.synthesizer import KnowledgeSynthesizer
+
+    reader = VaultReader(args.vault_path)
+    synth = KnowledgeSynthesizer(reader=reader)
+
+    if args.weekly:
+        report = synth.weekly_report()
+        print(json.dumps(report, indent=2))
+    else:
+        digest = synth.daily_digest()
+        print(json.dumps(digest, indent=2))
+
+
+def cmd_vault_query_graph(args: argparse.Namespace) -> None:
+    """Query the knowledge graph."""
+    from vault.graph import VaultGraph
+    from vault.graph_query import GraphQueryEngine
+
+    graph = VaultGraph(args.vault_path)
+    graph.build()
+    engine = GraphQueryEngine(graph)
+    result = engine.execute(args.query)
+    print(json.dumps(result, indent=2))
+
+
+def cmd_vault_analytics(args: argparse.Namespace) -> None:
+    """Show usage analytics."""
+    from vault.analytics import UsageAnalytics
+
+    analytics = UsageAnalytics(vault_root=args.vault_path)
+    report = analytics.generate_report(period=args.period)
+    print(json.dumps(report, indent=2))
+
+
+def cmd_vault_plugins(args: argparse.Namespace) -> None:
+    """List or manage plugins."""
+    from vault.plugins import PluginManager
+
+    pm = PluginManager()
+    plugins = pm.list_plugins()
+    if not plugins:
+        print("No plugins registered.")
+    else:
+        for p in plugins:
+            status = "✓ enabled" if p.get("enabled") else "✗ disabled"
+            print(f"  {status}  {p['name']} v{p['version']}")
+
+
+# ---------------------------------------------------------------------------
 # CLI parser
 # ---------------------------------------------------------------------------
 
@@ -259,6 +428,37 @@ def build_parser() -> argparse.ArgumentParser:
     pipe_sub = sub.add_parser("pipeline", help="End-to-end pipeline")
     pipe_sub.add_argument("text")
 
+    # ── Intelligence ──
+    intel_sub = sub.add_parser("intel", help="Intelligence features")
+    intel_cmds = intel_sub.add_subparsers(dest="intel_command")
+
+    p = intel_cmds.add_parser("temporal", help="Parse time expressions")
+    p.add_argument("text")
+
+    intel_cmds.add_parser("cluster", help="Cluster notes by topic")
+    intel_cmds.add_parser("insights", help="Generate daily insights")
+
+    p = intel_cmds.add_parser("recommend", help="Recommend related notes")
+    p.add_argument("note-id", nargs="?", default="", help="Note ID (optional)")
+    p.add_argument("--stale", action="store_true", help="Find stale projects")
+
+    # ── Vault intel ──
+    vault_intel = sub.add_parser("vault-intel", help="Vault intelligence")
+    vi_cmds = vault_intel.add_subparsers(dest="vi_command")
+
+    vi_cmds.add_parser("schedule", help="Show scheduled tasks")
+
+    p = vi_cmds.add_parser("digest", help="Generate digest")
+    p.add_argument("--weekly", action="store_true", help="Weekly report")
+
+    p = vi_cmds.add_parser("query-graph", help="Query knowledge graph")
+    p.add_argument("query")
+
+    p = vi_cmds.add_parser("analytics", help="Usage analytics")
+    p.add_argument("--period", default="weekly", choices=["daily", "weekly", "monthly"])
+
+    vi_cmds.add_parser("plugins", help="List plugins")
+
     return parser
 
 
@@ -283,12 +483,23 @@ def main() -> None:
         ("corrections", "export"): cmd_corrections_export,
         ("corrections", "history"): cmd_corrections_history,
         ("pipeline", None): cmd_pipeline,
+        ("intel", "temporal"): cmd_brain_temporal,
+        ("intel", "cluster"): cmd_brain_cluster,
+        ("intel", "insights"): cmd_brain_insights,
+        ("intel", "recommend"): cmd_brain_recommend,
+        ("vault-intel", "schedule"): cmd_vault_schedule,
+        ("vault-intel", "digest"): cmd_vault_digest,
+        ("vault-intel", "query-graph"): cmd_vault_query_graph,
+        ("vault-intel", "analytics"): cmd_vault_analytics,
+        ("vault-intel", "plugins"): cmd_vault_plugins,
     }
 
     sub_cmd = (
         getattr(args, "brain_command", None)
         or getattr(args, "vault_command", None)
         or getattr(args, "corr_command", None)
+        or getattr(args, "intel_command", None)
+        or getattr(args, "vi_command", None)
     )
     key = (args.command, sub_cmd)
     handler = dispatch.get(key)

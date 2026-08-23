@@ -29,6 +29,9 @@ dependencies = [
 [project.scripts]
 transcribe = "transcribe:main"
 train-wakeword = "train_wakeword:main"
+brain-cli = "scripts.brain_cli:main"
+unified-cli = "scripts.unified_cli:main"
 
 [tool.setuptools]
 py-modules = ["transcribe", "audio", "wakeword", "vad", "speech", "hotkey", "tts", "train_wakeword"]
+packages = ["brain", "vault", "scripts"]
