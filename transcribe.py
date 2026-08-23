@@ -26,6 +26,14 @@ from wakeword import (
     list_available_wakewords,
 )
 
+# Vault integration (optional — graceful fallback if not installed)
+try:
+    from vault.pipeline import VaultPipeline
+    from vault.config import VAULT_ROOT
+    HAS_VAULT = True
+except ImportError:
+    HAS_VAULT = False
+
 
 CONFIG_FILE = "config.json"
 
@@ -150,6 +158,22 @@ def parse_arguments(args=None) -> argparse.Namespace:
         action="store_true",
         help="Enable verbose / debug output",
     )
+    parser.add_argument(
+        "--brain",
+        action="store_true",
+        help="Enable brain understanding (classify transcription)",
+    )
+    parser.add_argument(
+        "--vault",
+        action="store_true",
+        help="Enable vault writing (requires --brain)",
+    )
+    parser.add_argument(
+        "--vault-path",
+        type=str,
+        default=os.getenv("VAULT_PATH", "vault"),
+        help="Vault root directory",
+    )
     parsed = parser.parse_args(args)
 
     if parsed.enable_wake_word and not parsed.wake_word:
@@ -231,7 +255,29 @@ def run_pipeline(args: argparse.Namespace) -> int:
         print("Error: Both hotkey and wake-word are disabled. Enable at least one trigger method.", file=sys.stderr)
         return 1
 
-    # 5. Initialize KittenTTS Engine (Rosie voice)
+    # 5. Initialize Brain + Vault (if enabled)
+    brain_engine = None
+    vault_pipeline = None
+    if args.brain:
+        try:
+            from brain.understand import BrainEngine
+            if args.verbose:
+                print("[Debug] Initializing brain engine...")
+            brain_engine = BrainEngine()
+        except Exception as e:
+            print(f"[Warning] Brain initialization failed: {e}. Continuing without brain.", file=sys.stderr)
+
+    if args.vault and HAS_VAULT:
+        try:
+            if args.verbose:
+                print(f"[Debug] Initializing vault at {args.vault_path}...")
+            vault_pipeline = VaultPipeline(vault_root=args.vault_path)
+        except Exception as e:
+            print(f"[Warning] Vault initialization failed: {e}", file=sys.stderr)
+    elif args.vault and not HAS_VAULT:
+        print("[Warning] vault module not available. Vault writing disabled.", file=sys.stderr)
+
+    # 6. Initialize KittenTTS Engine (Rosie voice)
     tts_engine = None
     if enable_tts:
         try:
@@ -355,7 +401,31 @@ def run_pipeline(args: argparse.Namespace) -> int:
                     print(f"\n{transcription}\n")
                     sys.stdout.flush()
 
-                    # State 5: KittenTTS voice reply (Rosie voice)
+                    # State 5a: Brain understanding + vault writing
+                    understanding = None
+                    if brain_engine:
+                        try:
+                            understanding = brain_engine.understand(transcription)
+                            if args.verbose:
+                                print(f"[Debug] Brain: type={understanding.type.value}, "
+                                      f"priority={understanding.priority:.2f}, "
+                                      f"confidence={understanding.confidence:.2f}")
+                        except Exception as e:
+                            if args.verbose:
+                                print(f"[Debug] Brain error: {e}", file=sys.stderr)
+
+                    if vault_pipeline and understanding:
+                        try:
+                            file_path = vault_pipeline.process_safe(understanding)
+                            if file_path:
+                                print(f"[Vault] Saved: {file_path}")
+                            else:
+                                print("[Vault] Write failed (see logs)")
+                        except Exception as e:
+                            if args.verbose:
+                                print(f"[Debug] Vault error: {e}", file=sys.stderr)
+
+                    # State 5b: KittenTTS voice reply (Rosie voice)
                     if tts_engine:
                         try:
                             tts_engine.speak(transcription, wait=True)

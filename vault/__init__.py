@@ -22,6 +22,13 @@ Sub-modules (foundation first, then advanced):
   pipeline – end-to-end: Understanding → vault write
 """
 
-from vault.config import VAULT_ROOT, INDEX_DIR, EMBEDDING_DIM
+from vault.config import VAULT_ROOT, INDEX_DIR, EMBEDDING_DIM, VAULT_VERSION
+from vault.pipeline import VaultPipeline
+from vault.reader import VaultReader
+from vault.search import VaultSearch
 
-__all__ = ["VAULT_ROOT", "INDEX_DIR", "EMBEDDING_DIM"]
+__version__ = VAULT_VERSION
+__all__ = [
+    "VAULT_ROOT", "INDEX_DIR", "EMBEDDING_DIM", "VAULT_VERSION",
+    "VaultPipeline", "VaultReader", "VaultSearch",
+]

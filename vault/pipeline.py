@@ -8,11 +8,14 @@ This is the main entry point that ``transcribe.py`` will call at merge time.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, List, Optional
 
 from brain_contract import Understanding, NoteType
-from vault.config import VAULT_ROOT, INDEX_DIR
+from vault.config import VAULT_ROOT, INDEX_DIR, DRY_RUN
+
+logger = logging.getLogger(__name__)
 from vault.reader import VaultReader
 from vault.writer import VaultWriter
 from vault.index import VaultIndex
@@ -102,6 +105,127 @@ class VaultPipeline:
     def query(self, text: str, embedder: Any = None) -> Dict[str, Any]:
         """Search and answer a question about the vault."""
         return self.answerer.answer(text, embedder)
+
+    # ------------------------------------------------------------------
+    # Safe methods (never raise)
+    # ------------------------------------------------------------------
+
+    def process_safe(self, understanding: Understanding) -> Optional[str]:
+        """Process with full error handling. Never raises.
+
+        Returns file_path on success, None on failure.
+        """
+        try:
+            if DRY_RUN:
+                plan = self.dry_run(understanding)
+                return plan.get("file_path")
+            return self.process(understanding)
+        except Exception as e:
+            logger.error("Pipeline error: %s", e)
+            try:
+                return self._fallback_write(understanding)
+            except Exception as e2:
+                logger.error("Fallback write also failed: %s", e2)
+                return None
+
+    def process_batch_safe(
+        self,
+        understandings: List[Understanding],
+    ) -> List[Optional[str]]:
+        """Process multiple understandings with error handling.
+
+        Returns list of file_paths (None for failures).
+        """
+        paths: List[Optional[str]] = []
+        for u in understandings:
+            paths.append(self.process_safe(u))
+        return paths
+
+    def dry_run(self, understanding: Understanding) -> Dict[str, Any]:
+        """Simulate processing without writing anything.
+
+        Returns dict describing what WOULD happen.
+        """
+        from vault.schema import NoteSchema
+        from brain_contract import NOTE_TYPE_DIRS
+
+        subdir = NOTE_TYPE_DIRS.get(understanding.type, "daily")
+        if understanding.action:
+            slug = NoteSchema.slugify(understanding.action)
+        elif understanding.topics:
+            slug = NoteSchema.slugify(understanding.topics[0])
+        else:
+            slug = NoteSchema.slugify(understanding.text[:60])
+
+        file_path = os.path.join(self.vault_root, subdir, f"{slug}.md")
+
+        # Count entities that would be linked
+        linked = []
+        from brain_contract import ENTITY_PAGE_TYPES
+        for e in understanding.entities:
+            if e.entity_type in ENTITY_PAGE_TYPES:
+                linked.append(NoteSchema.slugify(e.name))
+
+        return {
+            "file_path": file_path,
+            "note_type": understanding.type.value,
+            "entities_linked": linked,
+            "index_added": understanding.embedding is not None,
+            "would_write": not DRY_RUN,
+        }
+
+    def health_check(self) -> Dict[str, Any]:
+        """Check vault health and return diagnostics."""
+        import shutil as _shutil
+
+        note_count = self.reader.count()
+        index_size = self.index.size
+        graph_edges = self.graph.num_edges
+        orphans = len(self.graph.orphans())
+
+        # Disk usage
+        disk_mb = 0.0
+        if os.path.isdir(self.vault_root):
+            total = 0
+            for dirpath, _dn, fnames in os.walk(self.vault_root):
+                for f in fnames:
+                    fp = os.path.join(dirpath, f)
+                    try:
+                        total += os.path.getsize(fp)
+                    except OSError:
+                        pass
+            disk_mb = round(total / (1024 * 1024), 2)
+
+        return {
+            "vault_exists": os.path.isdir(self.vault_root),
+            "note_count": note_count,
+            "index_size": index_size,
+            "graph_edges": graph_edges,
+            "orphan_count": orphans,
+            "broken_links": 0,  # requires schema.VaultValidator
+            "disk_usage_mb": disk_mb,
+        }
+
+    def backup(self, note_path: str) -> Optional[str]:
+        """Create a backup before overwriting a note.
+
+        Returns backup path or None if backup disabled or file missing.
+        """
+        if not os.path.exists(note_path):
+            return None
+        return self.writer._create_backup(note_path)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _fallback_write(self, understanding: Understanding) -> Optional[str]:
+        """Emergency fallback: write raw text to daily journal."""
+        try:
+            return self.writer.write_daily_entry(understanding)
+        except Exception as e:
+            logger.error("Fallback write failed: %s", e)
+            return None
 
     # ------------------------------------------------------------------
     # Maintenance

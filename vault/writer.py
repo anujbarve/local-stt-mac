@@ -14,8 +14,11 @@ Given an ``Understanding`` object, this module:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import shutil
+import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -26,9 +29,11 @@ from brain_contract import (
     NOTE_TYPE_DIRS,
     ENTITY_PAGE_TYPES,
 )
-from vault.config import VAULT_ROOT
+from vault.config import VAULT_ROOT, BACKUP_ENABLED, BACKUP_DIR, ATOMIC_WRITES
 from vault.schema import NoteSchema
 from vault.templates import NoteTemplate
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +159,110 @@ class VaultWriter:
 
         with open(file_path, "w", encoding="utf-8") as fh:
             fh.write(f"---\n{fm_block}\n---\n\n{body}")
+
+    # ------------------------------------------------------------------
+    # Atomic writes & backup
+    # ------------------------------------------------------------------
+
+    def write_atomic(self, understanding: Understanding) -> str:
+        """Write note atomically (write to temp, then rename).
+
+        Prevents corruption if the process crashes mid-write.
+        Returns the file path of the created note.
+        """
+        note_id = understanding.note_id or NoteSchema.generate_id()
+        understanding.note_id = note_id
+
+        subdir = self._determine_directory(understanding.type)
+        filename = self._generate_filename(understanding, subdir)
+        file_path = os.path.join(subdir, filename)
+
+        u_dict = understanding.to_dict()
+        u_dict["note_id"] = note_id
+        content = NoteTemplate.render(u_dict)
+        os.makedirs(subdir, exist_ok=True)
+
+        # Write to temp file, then atomic rename
+        fd, tmp_path = tempfile.mkstemp(suffix=".md", dir=subdir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            os.replace(tmp_path, file_path)
+        except Exception:
+            # Clean up temp file on failure
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+
+        understanding.file_path = file_path
+        self._update_backlinks(understanding, file_path)
+        return file_path
+
+    def backup_and_write(self, understanding: Understanding) -> str:
+        """Backup existing note before overwriting.
+
+        Only backs up if a file with this slug already exists.
+        Returns the file path of the created note.
+        """
+        if not BACKUP_ENABLED:
+            return self.write(understanding)
+
+        # Determine the path this note would land at
+        subdir = self._determine_directory(understanding.type)
+        if understanding.action:
+            base_slug = NoteSchema.slugify(understanding.action)
+        elif understanding.topics:
+            base_slug = NoteSchema.slugify(understanding.topics[0])
+        else:
+            base_slug = NoteSchema.slugify(understanding.text[:60])
+
+        candidate = os.path.join(subdir, f"{base_slug}.md")
+        if os.path.exists(candidate):
+            self._create_backup(candidate)
+
+        return self.write(understanding)
+
+    def write_if_new(self, understanding: Understanding) -> Optional[str]:
+        """Write only if a note with this content doesn't already exist.
+
+        Prevents duplicate notes from repeated transcriptions.
+        Returns file_path if written, None if already exists.
+        """
+        # Check for existing notes with same text
+        existing = self.reader.read_all() if hasattr(self, "reader") else []
+        text_lower = understanding.text.strip().lower()
+        for note in existing:
+            if note.get("body", "").strip().lower() == text_lower:
+                return None
+            if text_lower and text_lower in note.get("body", "").lower():
+                return None
+
+        return self.write(understanding)
+
+    def _create_backup(self, file_path: str) -> Optional[str]:
+        """Create a timestamped backup of a file.
+
+        Returns the backup path, or None on failure.
+        """
+        if not os.path.exists(file_path):
+            return None
+
+        backup_dir = os.path.join(self.vault_root, "_backups")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        basename = os.path.basename(file_path)
+        stem, ext = os.path.splitext(basename)
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{stem}_{timestamp}{ext}"
+        backup_path = os.path.join(backup_dir, backup_name)
+
+        try:
+            shutil.copy2(file_path, backup_path)
+            logger.info("Backup created: %s", backup_path)
+            return backup_path
+        except Exception as e:
+            logger.warning("Backup failed for %s: %s", file_path, e)
+            return None
 
     # ------------------------------------------------------------------
     # Internal helpers
