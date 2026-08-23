@@ -225,10 +225,74 @@ class VaultGraph:
     def num_edges(self) -> int:
         return sum(len(v) for v in self._outgoing.values())
 
-    def stats(self) -> Dict[str, Any]:
+    def centrality(self, top_k: int = 10) -> List[Dict[str, Any]]:
+        """Compute betweenness centrality (simplified) for notes.
+
+        Returns list of {note_id, centrality_score} sorted by score.
+        """
+        if not self._all_notes:
+            return []
+
+        # Simplified centrality: count how many shortest paths pass through each node
+        centrality: Dict[str, float] = {n: 0.0 for n in self._all_notes}
+        all_list = sorted(self._all_notes)
+
+        # For efficiency, sample pairs (full betweenness is O(V*E))
+        sample_size = min(len(all_list), 50)
+        step = max(1, len(all_list) // sample_size)
+
+        for i in range(0, len(all_list), step):
+            source = all_list[i]
+            # BFS from source
+            visited: Set[str] = {source}
+            queue: deque = deque([(source, [source])])
+            while queue:
+                current, path = queue.popleft()
+                all_next = self._outgoing.get(current, set()) | self._incoming.get(current, set())
+                for nxt in all_next:
+                    if nxt not in visited:
+                        visited.add(nxt)
+                        new_path = path + [nxt]
+                        queue.append((nxt, new_path))
+                        # Count intermediate nodes
+                        for node in new_path[1:-1]:
+                            centrality[node] += 1.0
+
+        # Normalize
+        max_c = max(centrality.values()) if centrality else 1.0
+        if max_c > 0:
+            for k in centrality:
+                centrality[k] /= max_c
+
+        ranked = sorted(centrality.items(), key=lambda x: x[1], reverse=True)
+        return [{"note_id": nid, "centrality_score": round(score, 4)}
+                for nid, score in ranked[:top_k]]
+
+    def graph_stats(self) -> Dict[str, Any]:
+        """Compute comprehensive graph statistics."""
+        n = self.num_nodes
+        e = self.num_edges
+        density = (e / (n * (n - 1))) if n > 1 else 0.0
+
+        # Average degree
+        degrees = []
+        for note in self._all_notes:
+            deg = len(self._outgoing.get(note, set())) + len(self._incoming.get(note, set()))
+            degrees.append(deg)
+        avg_degree = sum(degrees) / len(degrees) if degrees else 0.0
+
+        communities = self.communities()
+        largest = max((len(c) for c in communities), default=0)
+
         return {
-            "num_nodes": self.num_nodes,
-            "num_edges": self.num_edges,
+            "num_nodes": n,
+            "num_edges": e,
+            "density": round(density, 4),
+            "avg_degree": round(avg_degree, 2),
+            "num_communities": len(communities),
+            "largest_community": largest,
             "num_orphans": len(self.orphans()),
-            "num_communities": len(self.communities()),
         }
+
+    def stats(self) -> Dict[str, Any]:
+        return self.graph_stats()
