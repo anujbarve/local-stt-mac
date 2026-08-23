@@ -26,9 +26,10 @@ from vault.config import VAULT_ROOT, INDEX_DIR, EMBEDDING_DIM, VAULT_VERSION
 from vault.pipeline import VaultPipeline
 from vault.reader import VaultReader
 from vault.search import VaultSearch
+from vault.corrections import CorrectionVault
 
 __version__ = VAULT_VERSION
 __all__ = [
     "VAULT_ROOT", "INDEX_DIR", "EMBEDDING_DIM", "VAULT_VERSION",
-    "VaultPipeline", "VaultReader", "VaultSearch",
+    "VaultPipeline", "VaultReader", "VaultSearch", "CorrectionVault",
 ]

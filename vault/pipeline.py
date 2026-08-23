@@ -26,6 +26,7 @@ from vault.query import QueryParser
 from vault.moc import VaultMOC
 from vault.llm import LocalLLM
 from vault.answer import VaultAnswerer
+from vault.corrections import CorrectionVault
 
 
 class VaultPipeline:
@@ -52,6 +53,7 @@ class VaultPipeline:
         self.moc = VaultMOC(vault_root, self.reader, self.graph)
         self.llm = LocalLLM()
         self.answerer = VaultAnswerer(self.search, self.reader, self.llm)
+        self.correction_vault = CorrectionVault(vault_root)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -105,6 +107,42 @@ class VaultPipeline:
     def query(self, text: str, embedder: Any = None) -> Dict[str, Any]:
         """Search and answer a question about the vault."""
         return self.answerer.answer(text, embedder)
+
+    # ------------------------------------------------------------------
+    # Correction support
+    # ------------------------------------------------------------------
+
+    def process_with_correction(
+        self,
+        understanding: Understanding,
+        corrected: Optional[Understanding] = None,
+    ) -> tuple:
+        """Process with optional pre-corrected understanding.
+
+        Args:
+            understanding: Original brain output
+            corrected: Pre-corrected version (if user already corrected)
+
+        Returns:
+            (file_path, was_corrected)
+        """
+        if corrected is not None:
+            # Log the correction
+            self.correction_vault.log_correction(
+                understanding.text, understanding, corrected
+            )
+            understanding = corrected
+
+        path = self.process_safe(understanding)
+        return path, corrected is not None
+
+    def get_correction_stats(self) -> Dict[str, Any]:
+        """Get correction statistics."""
+        return self.correction_vault.get_stats()
+
+    def export_corrections(self, output_path: str) -> int:
+        """Export corrections for brain retraining."""
+        return self.correction_vault.export_training_data(output_path)
 
     # ------------------------------------------------------------------
     # Safe methods (never raise)
