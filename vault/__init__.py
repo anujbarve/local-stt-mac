@@ -27,9 +27,15 @@ from vault.pipeline import VaultPipeline
 from vault.reader import VaultReader
 from vault.search import VaultSearch
 from vault.corrections import CorrectionVault
+from vault.backup import VaultBackup
+from vault.observability import StructuredLogger, MetricsCollector
+from vault.migration import SchemaMigrator
+from vault.notifications import NotificationManager
 
 __version__ = VAULT_VERSION
 __all__ = [
     "VAULT_ROOT", "INDEX_DIR", "EMBEDDING_DIM", "VAULT_VERSION",
     "VaultPipeline", "VaultReader", "VaultSearch", "CorrectionVault",
+    "VaultBackup", "StructuredLogger", "MetricsCollector",
+    "SchemaMigrator", "NotificationManager",
 ]
