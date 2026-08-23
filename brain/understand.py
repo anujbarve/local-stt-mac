@@ -57,6 +57,99 @@ def _decode_bio_tag(tag_idx: int) -> Optional[tuple]:
     return None
 
 
+class ModelRegistry:
+    """Track and compare multiple model versions for A/B testing."""
+
+    def __init__(self):
+        self.models: Dict[str, "BrainEngine"] = {}
+        self.results: Dict[str, List[Dict]] = {}
+
+    def register(self, name: str, engine: "BrainEngine") -> None:
+        """Register a model version."""
+        self.models[name] = engine
+        self.results[name] = []
+
+    def unregister(self, name: str) -> None:
+        """Remove a model version."""
+        self.models.pop(name, None)
+        self.results.pop(name, None)
+
+    def compare(
+        self,
+        texts: List[str],
+    ) -> Dict[str, Any]:
+        """Run all registered models on texts and compare.
+
+        Returns:
+            {
+                "model_a": {"avg_confidence": 0.78, "type_distribution": {...}},
+                "model_b": {"avg_confidence": 0.81, "type_distribution": {...}},
+                "agreement_rate": 0.92,
+                "total_texts": 100,
+            }
+        """
+        all_predictions: Dict[str, List[Dict]] = {}
+
+        for name, engine in self.models.items():
+            predictions = []
+            for text in texts:
+                u = engine.understand(text)
+                predictions.append({
+                    "type": u.type.value,
+                    "confidence": u.confidence,
+                    "priority": u.priority,
+                })
+            all_predictions[name] = predictions
+
+        # Compute per-model metrics
+        result: Dict[str, Any] = {}
+        for name, preds in all_predictions.items():
+            type_counts: Dict[str, int] = {}
+            for p in preds:
+                t = p["type"]
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+            result[name] = {
+                "avg_confidence": sum(p["confidence"] for p in preds) / len(preds) if preds else 0,
+                "avg_priority": sum(p["priority"] for p in preds) / len(preds) if preds else 0,
+                "type_distribution": type_counts,
+                "num_samples": len(preds),
+            }
+
+        # Compute agreement rate between first two models
+        model_names = list(all_predictions.keys())
+        if len(model_names) >= 2:
+            a_preds = all_predictions[model_names[0]]
+            b_preds = all_predictions[model_names[1]]
+            agree = sum(
+                1 for i in range(len(texts))
+                if a_preds[i]["type"] == b_preds[i]["type"]
+            )
+            result["agreement_rate"] = agree / len(texts) if texts else 0
+        else:
+            result["agreement_rate"] = 1.0
+
+        result["total_texts"] = len(texts)
+        return result
+
+    def predict_all(self, text: str) -> Dict[str, Dict]:
+        """Run all models on a single text.
+
+        Returns:
+            {"model_name": {"type": ..., "confidence": ..., ...}, ...}
+        """
+        results = {}
+        for name, engine in self.models.items():
+            u = engine.understand(text)
+            results[name] = {
+                "type": u.type.value,
+                "confidence": u.confidence,
+                "priority": u.priority,
+                "urgency": u.urgency.value,
+            }
+        return results
+
+
 class BrainEngine:
     """
     The main brain interface.
@@ -80,6 +173,57 @@ class BrainEngine:
         self.embedder = embedder
         self.entity_linker = entity_linker or EntityLinker()
         self.model.eval()
+
+        # Confidence calibration
+        self.temperature = 1.0
+
+    def calibrate(
+        self,
+        val_data: List[Dict],
+    ) -> float:
+        """Learn temperature on validation set for better calibrated confidence.
+
+        Args:
+            val_data: List of {text, type} dicts.
+
+        Returns:
+            Learned temperature value.
+        """
+        import torch.nn.functional as F
+
+        logits_list = []
+        labels_list = []
+
+        # Build reverse map: NoteType value -> index
+        type_to_idx = {t.value: i for i, t in enumerate(NoteType)}
+
+        for sample in val_data:
+            token_ids = self.tokenizer.encode(sample["text"], add_special=True)
+            token_tensor = torch.tensor([token_ids], dtype=torch.long)
+            with torch.no_grad():
+                outputs = self.model(token_tensor)
+            logits_list.append(outputs["classifier"][0])
+            type_name = sample.get("type", "observation")
+            labels_list.append(type_to_idx.get(type_name, 0))
+
+        if not logits_list:
+            return self.temperature
+
+        all_logits = torch.stack(logits_list)
+        all_labels = torch.tensor(labels_list)
+
+        # Grid search for best temperature
+        best_temp = 1.0
+        best_nll = float("inf")
+        for temp in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]:
+            scaled = all_logits / temp
+            nll = F.cross_entropy(scaled, all_labels).item()
+            if nll < best_nll:
+                best_nll = nll
+                best_temp = temp
+
+        self.temperature = best_temp
+        return best_temp
 
     @torch.no_grad()
     def understand(
@@ -582,24 +726,28 @@ class BrainEngine:
     def _compute_confidence(
         self, outputs: Dict[str, torch.Tensor]
     ) -> float:
-        """Compute overall model confidence from head outputs."""
-        # Average of softmax probabilities at predicted classes
+        """Compute overall model confidence with temperature scaling."""
+        import torch.nn.functional as F
+
         confidences = []
 
-        # Classifier confidence
-        type_probs = torch.softmax(outputs["classifier"][0], dim=0)
+        # Classifier confidence (with temperature scaling)
+        type_logits = outputs["classifier"][0] / self.temperature
+        type_probs = F.softmax(type_logits, dim=0)
         confidences.append(type_probs.max().item())
 
         # Priority confidence (distance from 0.5)
         priority = outputs["priority"][0, 0].item()
         confidences.append(abs(priority - 0.5) * 2)
 
-        # Urgency confidence
-        urgency_probs = torch.softmax(outputs["urgency"][0], dim=0)
+        # Urgency confidence (with temperature)
+        urgency_logits = outputs["urgency"][0] / self.temperature
+        urgency_probs = F.softmax(urgency_logits, dim=0)
         confidences.append(urgency_probs.max().item())
 
-        # Sentiment confidence
-        sentiment_probs = torch.softmax(outputs["sentiment"][0], dim=0)
+        # Sentiment confidence (with temperature)
+        sentiment_logits = outputs["sentiment"][0] / self.temperature
+        sentiment_probs = F.softmax(sentiment_logits, dim=0)
         confidences.append(sentiment_probs.max().item())
 
         # Temporal confidence

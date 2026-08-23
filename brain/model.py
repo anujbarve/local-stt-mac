@@ -113,14 +113,30 @@ class BrainModel(nn.Module):
         """Total trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-    def save(self, path: str) -> None:
-        """Save model state dict and config."""
+    def save(
+        self,
+        path: str,
+        version: str = "0.1.0",
+        metadata: Optional[Dict] = None,
+    ) -> None:
+        """Save model with version metadata.
+
+        Args:
+            path: Output file path.
+            version: Semantic version string (e.g. "1.2.0").
+            metadata: Optional dict of training metrics, dataset info, etc.
+        """
         import os
+        from datetime import datetime, timezone
+
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         torch.save({
             "state_dict": self.state_dict(),
             "vocab_size": self.backbone.token_embedding.num_embeddings,
             "d_model": self.backbone.d_model,
+            "version": version,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": metadata or {},
         }, path)
 
     @classmethod
@@ -133,3 +149,28 @@ class BrainModel(nn.Module):
         )
         model.load_state_dict(checkpoint["state_dict"])
         return model
+
+    @classmethod
+    def load_versions(cls, checkpoint_dir: str) -> list:
+        """List all model versions in a directory.
+
+        Returns list of dicts with file, version, saved_at, metadata.
+        """
+        import os
+        versions = []
+        if not os.path.isdir(checkpoint_dir):
+            return versions
+        for fname in sorted(os.listdir(checkpoint_dir)):
+            if fname.endswith(".pt"):
+                fpath = os.path.join(checkpoint_dir, fname)
+                try:
+                    ckpt = torch.load(fpath, map_location="cpu", weights_only=False)
+                    versions.append({
+                        "file": fname,
+                        "version": ckpt.get("version", "unknown"),
+                        "saved_at": ckpt.get("saved_at", "unknown"),
+                        "metadata": ckpt.get("metadata", {}),
+                    })
+                except Exception:
+                    continue
+        return versions

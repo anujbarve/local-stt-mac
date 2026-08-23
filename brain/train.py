@@ -585,6 +585,65 @@ class BrainTrainer:
 
         return history
 
+    def incremental_train(
+        self,
+        new_data: List[Dict],
+        epochs: int = 3,
+        batch_size: int = 16,
+        lr: float = 1e-5,
+    ) -> Dict[str, float]:
+        """Fine-tune on new correction data (freezes backbone).
+
+        Args:
+            new_data: New correction samples.
+            epochs: Training epochs (fewer than full train).
+            batch_size: Batch size.
+            lr: Learning rate (lower for fine-tuning).
+
+        Returns:
+            Training metrics.
+        """
+        if not new_data:
+            return {"error": "no_data"}
+
+        # Freeze backbone, only train heads
+        for param in self.model.backbone.parameters():
+            param.requires_grad = False
+
+        # Create optimizer for heads only
+        head_params = [
+            p for name, p in self.model.named_parameters()
+            if "backbone" not in name and p.requires_grad
+        ]
+
+        optimizer = torch.optim.AdamW(head_params, lr=lr, weight_decay=WEIGHT_DECAY)
+        loader = self._make_loader(new_data, batch_size, shuffle=True)
+
+        metrics = MetricsTracker()
+        last_losses = {}
+
+        for epoch in range(epochs):
+            metrics.reset()
+            for batch in loader:
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                optimizer.zero_grad()
+                outputs = self.model(batch["token_ids"])
+                losses = compute_loss(outputs, batch)
+                losses["total"].backward()
+                torch.nn.utils.clip_grad_norm_(head_params, GRAD_CLIP)
+                optimizer.step()
+                metrics.update(outputs, batch)
+            last_losses = {k: v.item() if hasattr(v, 'item') else v for k, v in losses.items()}
+
+        # Unfreeze backbone
+        for param in self.model.backbone.parameters():
+            param.requires_grad = True
+
+        train_metrics = metrics.compute()
+        result = {"epochs": epochs, "samples": len(new_data)}
+        result.update({"train_" + k: v for k, v in train_metrics.items()})
+        return result
+
     def retrain_head(
         self,
         head_name: str,

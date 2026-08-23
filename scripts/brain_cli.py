@@ -47,27 +47,49 @@ def main():
 
     # evaluate
     p_evaluate = subparsers.add_parser("evaluate")
+    p_evaluate.add_argument("--test-data")
     p_evaluate.add_argument("--confusion", action="store_true")
     p_evaluate.add_argument("--per-type", action="store_true")
-    p_evaluate.add_argument("--quick", action="store_true")
+    p_evaluate.add_argument("--output")
+    p_evaluate.add_argument("--checkpoint", default="checkpoints/brain")
+
+    # export
+    p_export = subparsers.add_parser("export")
+    p_export.add_argument("--onnx", action="store_true", help="Export to ONNX format")
+    p_export.add_argument("--output", help="Output path")
+    p_export.add_argument("--versions", action="store_true", help="List model versions")
+    p_export.add_argument("--checkpoint", default="checkpoints/brain")
+
+    # corrections
+    p_corrections = subparsers.add_parser("corrections")
+    p_corrections.add_argument("--stats", action="store_true")
+    p_corrections.add_argument("--export")
+    p_corrections.add_argument("--import-file", dest="import_file")
+
+    # retrain
+    p_retrain = subparsers.add_parser("retrain")
+    p_retrain.add_argument("--epochs", type=int, default=5)
+    p_retrain.add_argument("--checkpoint", default="checkpoints/brain")
 
     # stats
     subparsers.add_parser("stats")
 
     args = parser.parse_args()
 
-    if args.command == "understand":
-        cmd_understand(args)
-    elif args.command == "interactive":
-        cmd_interactive(args)
-    elif args.command == "batch":
-        cmd_batch(args)
-    elif args.command == "train":
-        cmd_train(args)
-    elif args.command == "evaluate":
-        cmd_evaluate(args)
-    elif args.command == "stats":
-        cmd_stats()
+    handlers = {
+        "understand": cmd_understand,
+        "interactive": cmd_interactive,
+        "batch": cmd_batch,
+        "train": cmd_train,
+        "evaluate": cmd_evaluate,
+        "export": cmd_export,
+        "corrections": cmd_corrections,
+        "retrain": cmd_retrain,
+        "stats": cmd_stats,
+    }
+    handler = handlers.get(args.command)
+    if handler:
+        handler(args)
     else:
         parser.print_help()
 
@@ -162,25 +184,101 @@ def cmd_train(args):
 
 
 def cmd_evaluate(args):
-    import subprocess
-    cmd = [sys.executable, "scripts/evaluate.py"]
-    if args.confusion:
-        cmd.append("--confusion")
-    if args.per_type:
-        cmd.append("--per-type")
-    if args.quick:
-        cmd.append("--quick")
-    subprocess.run(cmd)
+    """Evaluate model on test data."""
+    from brain.understand import BrainEngine
+    from brain.evaluate import BrainEvaluator
+
+    engine = BrainEngine.load(args.checkpoint)
+    evaluator = BrainEvaluator(engine.model, engine.tokenizer)
+
+    if args.test_data:
+        with open(args.test_data) as f:
+            test_data = json.load(f)
+
+        report = evaluator.evaluate(test_data)
+        print(json.dumps(report, indent=2, default=str))
+
+        if args.output:
+            evaluator.generate_report(test_data, args.output)
+            print(f"Report saved to {args.output}")
+    else:
+        # No test data — show basic model info
+        print("Brain Evaluator")
+        print("=" * 40)
+        print(f"Model loaded: {args.checkpoint}")
+        print(f"Usage: python scripts/brain_cli.py evaluate --test-data data/test.json")
+
+
+def cmd_export(args):
+    """Export model to ONNX or list versions."""
+    if args.versions:
+        from brain.model import BrainModel
+        versions = BrainModel.load_versions(args.checkpoint)
+        if not versions:
+            print(f"No model versions found in {args.checkpoint}")
+        else:
+            print(json.dumps(versions, indent=2))
+        return
+
+    from brain.understand import BrainEngine
+    from brain.train import export_onnx
+
+    engine = BrainEngine.load(args.checkpoint)
+    output = args.output or os.path.join(args.checkpoint, "model.onnx")
+    export_onnx(engine.model, engine.tokenizer, output)
+    print(f"Model exported to {output}")
+
+
+def cmd_corrections(args):
+    """Manage corrections."""
+    from brain.correct import CorrectionLogger
+    logger = CorrectionLogger()
+
+    if args.stats:
+        stats = logger.get_stats()
+        print(json.dumps(stats, indent=2))
+    elif args.export:
+        count = logger.export_training_data(args.export)
+        print(f"Exported {count} corrections to {args.export}")
+    elif args.import_file:
+        count = logger.import_training_data(args.import_file)
+        print(f"Imported {count} corrections from {args.import_file}")
+    else:
+        # Default: show stats
+        stats = logger.stats()
+        print(json.dumps(stats, indent=2))
+
+
+def cmd_retrain(args):
+    """Retrain from corrections."""
+    from brain.correct import CorrectionLogger
+    from brain.distill import DistillationPipeline
+    from brain.understand import BrainEngine
+
+    engine = BrainEngine.load(args.checkpoint)
+    logger = CorrectionLogger()
+    distiller = DistillationPipeline(engine, llm=None, correction_logger=logger)
+
+    if distiller.should_retrain():
+        metrics = distiller.retrain(epochs=args.epochs)
+        print(json.dumps(metrics, indent=2))
+        engine.save(args.checkpoint)
+        print("Model retrained and saved.")
+    else:
+        stats = logger.stats()
+        print(f"Not enough corrections for retraining ({stats['unapplied']} pending, need {20})")
 
 
 def cmd_stats():
     from brain.correct import CorrectionLogger
     logger = CorrectionLogger()
-    stats = logger.stats()
+    stats = logger.get_stats()
 
     print("Brain Stats")
     print("=" * 40)
-    print(f"Corrections:  {stats['total']} total, {stats['unapplied']} unapplied")
+    print(f"Corrections:  {stats['total_corrections']} total, {stats['pending']} pending")
+    if stats['by_field']:
+        print(f"By field:     {stats['by_field']}")
     print(f"Model:        checkpoints/brain/model.pt")
     print(f"Tokenizer:    checkpoints/brain/tokenizer.json")
 

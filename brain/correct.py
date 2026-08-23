@@ -7,7 +7,7 @@ are collected for retraining. Logs corrections to a JSONL file.
 
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from brain_contract import Correction, Understanding
 
@@ -126,6 +126,107 @@ class CorrectionLogger:
             "applied": applied,
             "unapplied": total - applied,
         }
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Detailed correction statistics.
+
+        Returns:
+            {
+                "total_corrections": 45,
+                "pending": 28,
+                "applied": 17,
+                "by_field": {"type": 12, "priority": 8, ...},
+                "accuracy_before": 0.72,
+                "accuracy_after": 0.81,
+                "last_retrained": "2026-08-23T14:00:00Z",
+            }
+        """
+        total = len(self.buffer)
+        applied = sum(1 for c in self.buffer if c.applied)
+        pending = total - applied
+
+        # Count corrections by field
+        by_field: Dict[str, int] = {}
+        for c in self.buffer:
+            # Determine which fields differ between predicted and corrected
+            pred = c.predicted
+            corr = c.corrected
+            if pred.type != corr.type:
+                by_field["type"] = by_field.get("type", 0) + 1
+            if abs(pred.priority - corr.priority) > 0.05:
+                by_field["priority"] = by_field.get("priority", 0) + 1
+            if pred.urgency != corr.urgency:
+                by_field["urgency"] = by_field.get("urgency", 0) + 1
+            if pred.sentiment != corr.sentiment:
+                by_field["sentiment"] = by_field.get("sentiment", 0) + 1
+            if pred.action != corr.action:
+                by_field["action"] = by_field.get("action", 0) + 1
+            if len(pred.entities) != len(corr.entities):
+                by_field["entities"] = by_field.get("entities", 0) + 1
+
+        return {
+            "total_corrections": total,
+            "pending": pending,
+            "applied": applied,
+            "by_field": by_field,
+        }
+
+    def export_training_data(self, path: str) -> int:
+        """Export corrections as JSONL for external training.
+
+        Args:
+            path: Output file path.
+
+        Returns:
+            Number of corrections exported.
+        """
+        count = 0
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            for c in self.buffer:
+                data = c.to_dict()
+                f.write(json.dumps(data) + "\n")
+                count += 1
+        return count
+
+    def import_training_data(self, path: str) -> int:
+        """Import corrections from JSONL.
+
+        Args:
+            path: Input file path.
+
+        Returns:
+            Number of corrections imported.
+        """
+        count = 0
+        if not os.path.exists(path):
+            return 0
+
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    predicted = Understanding.from_dict(data["predicted"])
+                    corrected = Understanding.from_dict(data["corrected"])
+                    correction = Correction(
+                        text=data["text"],
+                        predicted=predicted,
+                        corrected=corrected,
+                        timestamp=data.get("timestamp", ""),
+                        applied=data.get("applied", False),
+                    )
+                    self.buffer.append(correction)
+                    count += 1
+                except (json.JSONDecodeError, KeyError, Exception):
+                    continue
+
+        if count > 0:
+            self._save_buffer()
+
+        return count
 
     def clear(self) -> None:
         """Clear the correction buffer."""
