@@ -101,36 +101,57 @@ Both instances import from this file. It defines:
 ### Branching Strategy
 
 ```bash
-# Each instance works on their own branch
-git checkout -b feat/brain-core      # Instance A
-git checkout -b feat/vault-core      # Instance B
+# Phase 1 branches (COMPLETE ✅)
+git checkout -b feat/brain-core      # Instance A — merged to main
+git checkout -b feat/vault-core      # Instance B — merged to main
 
-# Merge to main only after testing
+# Phase 2 branches
+git checkout -b feat/brain-training   # Instance A
+git checkout -b feat/vault-retrieval  # Instance B
+
+# Merge to main after testing
 git checkout main
-git merge feat/brain-core
-git merge feat/vault-core
+git merge feat/brain-training
+git merge feat/vault-retrieval
 ```
 
 ### What to commit when
 
-**Instance A commits:**
-- `feat(brain): add tokenizer` 
-- `feat(brain): add backbone architecture`
-- `feat(brain): add all 10 heads`
-- `feat(brain): add synthetic data generator`
-- `feat(brain): add training pipeline`
-- `feat(brain): add inference API`
-- `test(brain): add model tests`
+**Instance A commits (Phase 1 — COMPLETE):**
+- `feat(brain): add tokenizer` ✅
+- `feat(brain): add backbone architecture` ✅
+- `feat(brain): add all 10 heads` ✅
+- `feat(brain): add synthetic data generator` ✅
+- `feat(brain): add training pipeline` ✅
+- `feat(brain): add inference API` ✅
+- `test(brain): add model tests` ✅
 
-**Instance B commits:**
-- `feat(vault): add note writer`
-- `feat(vault): add note reader`
-- `feat(vault): add FAISS index`
-- `feat(vault): add hybrid search`
-- `feat(vault): add knowledge graph`
-- `feat(vault): add auto-linker`
-- `feat(vault): add LLM integration`
-- `test(vault): add writer tests`
+**Instance A commits (Phase 2 — NEXT):**
+- `feat(brain): add MetricsTracker for per-head accuracy tracking`
+- `feat(brain): add LR scheduling and early stopping`
+- `feat(brain): add vault data loader`
+- `feat(brain): add data augmentation pipeline`
+- `feat(brain): add ONNX export`
+- `feat(scripts): add CLI training pipeline`
+- `feat(scripts): add CLI evaluation script`
+- `test(brain): add training and metrics tests`
+
+**Instance B commits (Phase 1 — COMPLETE):**
+- `feat(vault): add config, schema, templates, writer` ✅
+- `test(vault): add writer, schema, template tests` ✅
+
+**Instance B commits (Phase 2 — NEXT):**
+- `feat(vault): add VaultReader for reading notes from disk`
+- `feat(vault): add VaultIndex with FAISS vector search`
+- `feat(vault): add VaultSearch with hybrid retrieval`
+- `feat(vault): add VaultGraph for wikilink knowledge graph`
+- `feat(vault): add VaultMOC for Map of Content`
+- `feat(vault): add QueryParser for natural language queries`
+- `feat(vault): add LocalLLM wrapper for Gemma 3 1B`
+- `feat(vault): add VaultAnswerer for query answering`
+- `feat(vault): add VaultPipeline for end-to-end processing`
+- `feat(vault): add VaultLinker for auto-linking`
+- `test(vault): add reader, index, search, graph tests`
 
 ### Conflict prevention
 
@@ -297,18 +318,100 @@ transcribe.py
 
 ---
 
-## First Commit Checklist
+## Phase 1 Complete ✅
 
-Before starting work, both instances should:
+Brain module (12 modules, 66 tests) and Vault foundation (5 modules, 64 tests) are merged to main.
+130 tests passing. Zero conflicts.
 
-- [ ] Read `brain_contract.py` completely
-- [ ] Read `INSTANCE_A_BRAIN.md` or `INSTANCE_B_VAULT.md` completely
-- [ ] Read `SECOND_BRAIN_PLAN.md` for context
-- [ ] Create your branch: `feat/brain-core` or `feat/vault-core`
-- [ ] Create your directory: `mkdir brain` or `mkdir vault`
-- [ ] Write `__init__.py` with module docstring
-- [ ] Run the smoke test from your instance doc
-- [ ] Commit: `chore: initialize brain/ module` or `chore: initialize vault/ module`
+---
+
+## Phase 2: Enhancements & Retrieval
+
+### New Plan Files
+
+- **`INSTANCE_A_PLAN.md`** — Brain enhancements + CLI scripts
+- **`INSTANCE_B_PLAN.md`** — Vault retrieval + search + reasoning
+
+### New File Ownership (Phase 2)
+
+**Instance A adds:**
+```
+brain/train.py          # ENHANCE (MetricsTracker, LR scheduling, early stopping)
+brain/data.py           # ENHANCE (load_vault_data, DataAugmenter)
+brain/understand.py     # ENHANCE (batch optimization)
+brain/correct.py        # ENHANCE (retrain integration)
+scripts/                # NEW DIRECTORY
+scripts/train.py        # NEW: CLI training pipeline
+scripts/evaluate.py     # NEW: CLI evaluation script
+tests/test_train.py     # NEW
+tests/test_correct.py   # NEW
+```
+
+**Instance B adds:**
+```
+vault/reader.py         # NEW: vault file → structured dict
+vault/index.py          # NEW: FAISS vector index
+vault/search.py         # NEW: hybrid retrieval
+vault/graph.py          # NEW: wikilink / backlink graph
+vault/moc.py            # NEW: Map of Content
+vault/query.py          # NEW: NL query parser
+vault/llm.py            # NEW: Gemma 3 1B wrapper
+vault/answer.py         # NEW: query answering
+vault/pipeline.py       # NEW: end-to-end processor
+vault/linker.py         # NEW: auto-linking
+vault/tests/test_reader.py   # NEW
+vault/tests/test_index.py    # NEW
+vault/tests/test_search.py   # NEW
+vault/tests/test_graph.py    # NEW
+```
+
+### Phase 2 Branches
+
+```bash
+# Phase 2 branches
+feat/brain-training      # Instance A
+feat/vault-retrieval     # Instance B
+```
+
+### Phase 2 Timeline
+
+```
+Week 10 (parallel):
+  Instance A: brain/train.py + brain/data.py
+  Instance B: vault/reader.py + vault/index.py
+
+Week 11 (parallel):
+  Instance A: scripts/train.py + scripts/evaluate.py
+  Instance B: vault/search.py + vault/graph.py
+
+Week 12 (parallel):
+  Instance A: brain/correct.py + brain/understand.py
+  Instance B: vault/moc.py + vault/query.py
+
+Week 13 (parallel):
+  Instance A: tests + first training run
+  Instance B: vault/llm.py + vault/answer.py
+
+Week 14 (parallel):
+  Instance A: evaluate, tune hyperparams
+  Instance B: vault/pipeline.py + vault/linker.py
+
+Week 15 (merge):
+  Both: Wire transcribe.py → brain → vault
+  Both: End-to-end testing
+  Both: CLI + error handling
+```
+
+### Phase 2 Commit Checklist
+
+Before starting Phase 2, both instances should:
+
+- [ ] Read `INSTANCE_A_PLAN.md` or `INSTANCE_B_PLAN.md` completely
+- [ ] Read the existing modules in your directory (understand current code)
+- [ ] Create your branch: `feat/brain-training` or `feat/vault-retrieval`
+- [ ] Verify all Phase 1 tests pass: `python -m pytest brain/tests/ vault/tests/ -v`
+- [ ] Start building per your plan file
+- [ ] Commit with conventional commit messages
 - [ ] Push to your branch
 
 Then start building.
