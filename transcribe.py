@@ -26,6 +26,14 @@ from wakeword import (
     list_available_wakewords,
 )
 
+# Vault integration (optional — graceful fallback if not installed)
+try:
+    from vault.pipeline import VaultPipeline
+    from vault.config import VAULT_ROOT
+    HAS_VAULT = True
+except ImportError:
+    HAS_VAULT = False
+
 
 CONFIG_FILE = "config.json"
 
@@ -158,7 +166,7 @@ def parse_arguments(args=None) -> argparse.Namespace:
     parser.add_argument(
         "--vault",
         action="store_true",
-        help="Enable vault writing (save understanding to vault)",
+        help="Enable vault writing (requires --brain)",
     )
     parser.add_argument(
         "--interactive",
@@ -174,8 +182,8 @@ def parse_arguments(args=None) -> argparse.Namespace:
     parser.add_argument(
         "--vault-path",
         type=str,
-        default="vault/",
-        help="Vault root path",
+        default=os.getenv("VAULT_PATH", "vault"),
+        help="Vault root directory",
     )
     parsed = parser.parse_args(args)
 
@@ -258,17 +266,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
         print("Error: Both hotkey and wake-word are disabled. Enable at least one trigger method.", file=sys.stderr)
         return 1
 
-    # 5. Initialize KittenTTS Engine (Rosie voice)
-    tts_engine = None
-    if enable_tts:
-        try:
-            if args.verbose:
-                print(f"[Debug] Initializing KittenTTS ({args.tts_voice} voice)...")
-            tts_engine = KittenTTSEngine(voice=args.tts_voice, verbose=args.verbose)
-        except Exception as e:
-            print(f"[Warning] KittenTTS initialization failed: {e}. Continuing without TTS reply.", file=sys.stderr)
-
-    # 6. Initialize Brain Engine (if --brain enabled)
+    # 5. Initialize Brain + Vault (if enabled)
+    # 5. Initialize Brain Engine (if --brain enabled)
     brain_engine = None
     correction_logger = None
     if args.brain:
@@ -283,17 +282,28 @@ def run_pipeline(args: argparse.Namespace) -> int:
             print(f"[Warning] Brain initialization failed: {e}. Continuing without brain.", file=sys.stderr)
             brain_engine = None
 
-    # 7. Initialize Vault Pipeline (if --vault enabled)
+    # 6. Initialize Vault Pipeline (if --vault enabled)
     vault_pipeline = None
-    if args.vault:
+    if args.vault and HAS_VAULT:
         try:
             if args.verbose:
                 print(f"[Debug] Initializing Vault Pipeline: {args.vault_path}")
-            from vault.pipeline import VaultPipeline
             vault_pipeline = VaultPipeline(vault_root=args.vault_path)
         except Exception as e:
             print(f"[Warning] Vault initialization failed: {e}. Continuing without vault.", file=sys.stderr)
             vault_pipeline = None
+    elif args.vault and not HAS_VAULT:
+        print("[Warning] vault module not available. Vault writing disabled.", file=sys.stderr)
+
+    # 7. Initialize KittenTTS Engine (Rosie voice)
+    tts_engine = None
+    if enable_tts:
+        try:
+            if args.verbose:
+                print(f"[Debug] Initializing KittenTTS ({args.tts_voice} voice)...")
+            tts_engine = KittenTTSEngine(voice=args.tts_voice, verbose=args.verbose)
+        except Exception as e:
+            print(f"[Warning] KittenTTS initialization failed: {e}. Continuing without TTS reply.", file=sys.stderr)
 
     # 8. Start Microphone Stream
     try:
@@ -409,7 +419,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
                     print(f"\n{transcription}\n")
                     sys.stdout.flush()
 
-                    # State 4.5: Brain understanding
+                    # State 5a: Brain understanding + vault writing
                     understanding = None
                     if brain_engine:
                         try:
@@ -435,27 +445,26 @@ def run_pipeline(args: argparse.Namespace) -> int:
                                 if corrected:
                                     understanding = corrected
 
-                            # Write to vault
-                            if vault_pipeline and understanding:
-                                try:
-                                    file_path = vault_pipeline.process_safe(understanding)
-                                    if file_path:
-                                        print(f"[Vault] Saved: {file_path}")
-                                    else:
-                                        print("[Vault] Write failed")
-                                except Exception as e:
-                                    if args.verbose:
-                                        print(f"[Debug] Vault error: {e}", file=sys.stderr)
-
                             # Print understanding summary
                             if not args.verbose and understanding:
                                 print(f"  Type: {understanding.type.value} | Priority: {understanding.priority:.2f}")
-
                         except Exception as e:
                             if args.verbose:
                                 print(f"[Debug] Brain error: {e}", file=sys.stderr)
 
-                    # State 5: KittenTTS voice reply (Rosie voice)
+                    # Write to vault
+                    if vault_pipeline and understanding:
+                        try:
+                            file_path = vault_pipeline.process_safe(understanding)
+                            if file_path:
+                                print(f"[Vault] Saved: {file_path}")
+                            else:
+                                print("[Vault] Write failed (see logs)")
+                        except Exception as e:
+                            if args.verbose:
+                                print(f"[Debug] Vault error: {e}", file=sys.stderr)
+
+                    # State 5b: KittenTTS voice reply (Rosie voice)
                     if tts_engine:
                         try:
                             tts_engine.speak(transcription, wait=True)
