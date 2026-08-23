@@ -1,44 +1,54 @@
-# Instance B: Phase 4 — Interactive Correction & Unified CLI
+# Instance B: Phase 4 — Correction Vault & Unified CLI
 
 ## Your Mission (Phase 4)
 
-Wire the correction system into the vault pipeline. When the brain makes mistakes, the user corrects them, and those corrections get logged for retraining. You also build the unified CLI that combines brain + vault.
+Store corrections in the vault, add correction-aware pipeline processing, and build a unified CLI that wraps brain + vault operations. When the brain makes mistakes, corrections get logged and stored for retraining.
 
 **You are the vault. You store corrections. You learn from feedback.**
 
 ## Rules
 
 1. **DO NOT** touch `brain/` modules — only import from `brain_contract.py`
-2. **DO NOT** modify `brain_contract.py`
-3. **DO** import from `brain_contract.py` for shared types
-4. **DO** import from `vault/` modules (already built)
-5. **DO** write tests for every new module
-6. **DO** handle errors gracefully
+2. **DO NOT** modify `brain_contract.py` (FROZEN)
+3. **DO NOT** modify `transcribe.py` — modified during merge only
+4. **DO NOT** modify `scripts/brain_cli.py` — Instance A owns
+5. **DO** import from `brain_contract.py` for shared types
+6. **DO** import from `vault/` modules (already built)
+7. **DO** write tests for every new module
+8. **DO** handle errors gracefully
+9. **DO** keep all imports within `vault/` — no cross-boundary imports into `brain/`
 
-## File Ownership
+## File Ownership (STRICT)
 
 ### Instance B owns (ONLY touches these):
 ```
 vault/corrections.py      # NEW: correction vault storage
-vault/pipeline.py         # ENHANCE: add correction support
+vault/pipeline.py         # ENHANCE: add correction support (NO brain imports)
 vault/__init__.py         # ENHANCE: add correction exports
 vault/tests/              # NEW tests
 tests/test_correction_integration.py  # NEW
-transcribe.py             # ENHANCE: add interactive mode
-scripts/unified_cli.py    # NEW: unified brain + vault CLI
-```
-
-### Shared (both instances touch during integration):
-```
-brain_contract.py         # FROZEN
-requirements.txt          # add new deps
+scripts/unified_cli.py    # NEW: thin wrapper around brain_cli + vault
 ```
 
 ### OFF LIMITS:
 ```
 brain/                    # Instance A owns
 scripts/brain_cli.py      # Instance A owns
+transcribe.py             # Modified during merge only
+brain_contract.py         # FROZEN
 ```
+
+---
+
+## Key Design Principle: No Cross-Boundary Imports
+
+**Instance B NEVER imports from `brain/`.** Instead:
+
+- `vault/corrections.py` stores correction data using `brain_contract` types only
+- `vault/pipeline.py` adds `process_with_correction()` that accepts pre-corrected data
+- `scripts/unified_cli.py` is a thin CLI wrapper that calls `brain_cli.py` as a subprocess for brain operations
+
+This means zero merge conflicts — Instance A touches `brain/`, Instance B touches `vault/`.
 
 ---
 
@@ -46,7 +56,7 @@ scripts/brain_cli.py      # Instance A owns
 
 ### Step 1: `vault/corrections.py` — Correction Vault Storage
 
-**Purpose:** Store corrections in the vault as markdown notes + JSONL buffer.
+**Purpose:** Store corrections in the vault as JSONL buffer + optional markdown notes.
 
 **Interface:**
 
@@ -144,40 +154,40 @@ vault/_corrections/
 
 ### Step 2: Enhance `vault/pipeline.py`
 
-**Add correction-aware processing:**
+**Add correction-aware processing (NO brain imports):**
 
 ```python
 class VaultPipeline:
     # ... existing methods ...
 
+    def __init__(self, vault_root=VAULT_ROOT, index_dir=INDEX_DIR):
+        # ... existing init ...
+        self.correction_vault = CorrectionVault(vault_root)
+
     def process_with_correction(
         self,
         understanding: Understanding,
-        interactive: bool = False,
+        corrected: Optional[Understanding] = None,
     ) -> Tuple[Optional[str], bool]:
         """
-        Process with optional interactive correction.
+        Process with optional pre-corrected understanding.
+
+        Args:
+            understanding: Original brain output
+            corrected: Pre-corrected version (if user already corrected)
 
         Returns:
             (file_path, was_corrected)
         """
-        if interactive:
-            from brain.interactive import InteractiveCorrector
-            from brain.correct import CorrectionLogger
-
-            corrector = InteractiveCorrector(CorrectionLogger())
-            corrected, modified = corrector.present_and_correct(
-                understanding.text, understanding
+        if corrected is not None:
+            # Log the correction
+            self.correction_vault.log_correction(
+                understanding.text, understanding, corrected
             )
-            if modified:
-                # Log correction
-                self.correction_vault.log_correction(
-                    understanding.text, understanding, corrected
-                )
-                understanding = corrected
+            understanding = corrected
 
         path = self.process_safe(understanding)
-        return path, False  # was_corrected flag
+        return path, corrected is not None
 
     def get_correction_stats(self) -> Dict[str, Any]:
         """Get correction statistics."""
@@ -188,117 +198,74 @@ class VaultPipeline:
         return self.correction_vault.export_training_data(output_path)
 ```
 
----
-
-### Step 3: Enhance `transcribe.py` — Interactive Mode
-
-**Add `--interactive` flag:**
-
-```python
-# In parse_arguments():
-parser.add_argument(
-    "--interactive",
-    action="store_true",
-    help="Enable interactive correction after each transcription",
-)
-
-# In run_pipeline() — after transcription:
-if args.interactive and brain_engine and vault_pipeline:
-    corrected, modified = vault_pipeline.process_with_correction(
-        understanding, interactive=True
-    )
-    if modified:
-        print("[Vault] Correction logged for retraining")
-```
+**Key:** `process_with_correction()` accepts a pre-corrected `Understanding` — it does NOT import from `brain/`. The correction happens externally (in `transcribe.py` or `unified_cli.py`) and is passed in.
 
 ---
 
-### Step 4: `scripts/unified_cli.py` — Unified Brain + Vault CLI
+### Step 3: `scripts/unified_cli.py` — Unified Brain + Vault CLI
 
-**Purpose:** Single CLI entry point that combines brain and vault operations.
+**Purpose:** Single CLI entry point that wraps brain_cli.py (subprocess) + vault operations.
 
-**Interface:**
-
-```bash
-# Brain inference
-python scripts/unified_cli.py brain understand "Fix the VAD threshold"
-
-# Brain interactive mode
-python scripts/unified_cli.py brain interactive
-
-# Brain batch processing
-python scripts/unified_cli.py brain batch input.json --output results.json
-
-# Brain evaluation
-python scripts/unified_cli.py brain evaluate --test-data data/test.json
-
-# Brain retrain
-python scripts/unified_cli.py brain retrain --epochs 5
-
-# Vault operations
-python scripts/unified_cli.py vault stats
-python scripts/unified_cli.py vault search "what projects am I working on?"
-python scripts/unified_cli.py vault health
-python scripts/unified_cli.py vault process "I need to fix the VAD"
-
-# Correction management
-python scripts/unified_cli.py corrections stats
-python scripts/unified_cli.py corrections export --output corrections.jsonl
-python scripts/unified_cli.py corrections history
-
-# End-to-end pipeline
-python scripts/unified_cli.py pipeline "Meeting with Sarah about the project"
-python scripts/unified_cli.py pipeline --interactive "Fix the bug by Friday"
-```
-
-**Implementation:**
+**Key design:** Brain commands call `scripts/brain_cli.py` as a subprocess. No direct brain imports.
 
 ```python
 #!/usr/bin/env python3
-"""Unified CLI for brain + vault operations."""
+"""Unified CLI for brain + vault operations.
+
+Brain commands delegate to scripts/brain_cli.py via subprocess.
+Vault commands use vault modules directly.
+"""
 
 import argparse
 import json
+import subprocess
 import sys
 
-from brain.understand import BrainEngine
-from brain.correct import CorrectionLogger
-from brain.interactive import InteractiveCorrector
 from vault.pipeline import VaultPipeline
 from vault.corrections import CorrectionVault
 
 
+def _run_brain_cli(*args):
+    """Run brain_cli.py as subprocess."""
+    cmd = [sys.executable, "scripts/brain_cli.py"] + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    return result.returncode
+
+
 def cmd_brain_understand(args):
-    """Brain inference."""
-    engine = BrainEngine.load(args.checkpoint)
-    u = engine.understand(args.text)
+    """Brain inference — delegates to brain_cli.py."""
+    brain_args = ["understand", args.text]
     if args.json:
-        print(json.dumps(u.to_dict(), indent=2))
-    else:
-        print(f"Type:      {u.type.value}")
-        print(f"Priority:  {u.priority:.2f}")
-        print(f"Action:    {u.action or 'none'}")
-        print(f"Entities:  {[(e.name, e.entity_type.value) for e in u.entities]}")
-        print(f"Topics:    {u.topics}")
+        brain_args.append("--json")
+    if args.checkpoint:
+        brain_args.extend(["--checkpoint", args.checkpoint])
+    sys.exit(_run_brain_cli(*brain_args))
 
 
 def cmd_brain_interactive(args):
-    """Interactive brain mode."""
-    engine = BrainEngine.load(args.checkpoint)
-    logger = CorrectionLogger()
-    corrector = InteractiveCorrector(logger)
+    """Interactive brain mode — delegates to brain_cli.py."""
+    brain_args = ["interactive"]
+    if args.checkpoint:
+        brain_args.extend(["--checkpoint", args.checkpoint])
+    sys.exit(_run_brain_cli(*brain_args))
 
-    print("Brain Interactive Mode (type 'quit' to exit)")
-    while True:
-        text = input("\n> ").strip()
-        if text.lower() in ("quit", "exit", "q"):
-            break
-        if not text:
-            continue
-        u = engine.understand(text)
-        corrected, modified = corrector.present_and_correct(text, u)
-        if modified:
-            print(f"[Corrected] → {corrected.type.value}")
+
+def cmd_brain_evaluate(args):
+    """Brain evaluation — delegates to brain_cli.py."""
+    brain_args = ["evaluate", "--test-data", args.test_data]
+    if args.output:
+        brain_args.extend(["--output", args.output])
+    sys.exit(_run_brain_cli(*brain_args))
+
+
+def cmd_brain_retrain(args):
+    """Brain retrain — delegates to brain_cli.py."""
+    brain_args = ["retrain", "--epochs", str(args.epochs)]
+    sys.exit(_run_brain_cli(*brain_args))
 
 
 def cmd_vault_stats(args):
@@ -339,15 +306,10 @@ def cmd_corrections_export(args):
 
 def cmd_pipeline(args):
     """End-to-end pipeline."""
-    pipeline = VaultPipeline(vault_root=args.vault_path)
     from brain_contract import Understanding, NoteType
+    pipeline = VaultPipeline(vault_root=args.vault_path)
     u = Understanding(text=args.text, type=NoteType.OBSERVATION)
-
-    if args.interactive:
-        path, corrected = pipeline.process_with_correction(u, interactive=True)
-    else:
-        path = pipeline.process_safe(u)
-
+    path = pipeline.process_safe(u)
     if path:
         print(f"[Vault] Saved: {path}")
     else:
@@ -356,25 +318,22 @@ def cmd_pipeline(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Brain + Vault CLI")
+
+    # Global args
+    parser.add_argument("--vault-path", default="vault")
+
     sub = parser.add_subparsers(dest="command")
 
-    # Common args
-    parser.add_argument("--vault-path", default="vault")
-    parser.add_argument("--checkpoint", default="checkpoints/brain")
-
-    # Brain subcommands
-    brain_sub = sub.add_parser("brain")
+    # ── Brain subcommands ──
+    brain_sub = sub.add_parser("brain", help="Brain operations (delegates to brain_cli.py)")
     brain_cmds = brain_sub.add_subparsers(dest="brain_command")
 
     p = brain_cmds.add_parser("understand")
     p.add_argument("text")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--checkpoint", default="checkpoints/brain")
 
-    p = brain_cmds.add_parser("interactive")
-
-    p = brain_cmds.add_parser("batch")
-    p.add_argument("input")
-    p.add_argument("--output", default="results.json")
+    brain_cmds.add_parser("interactive")
 
     p = brain_cmds.add_parser("evaluate")
     p.add_argument("--test-data", required=True)
@@ -383,8 +342,8 @@ def main():
     p = brain_cmds.add_parser("retrain")
     p.add_argument("--epochs", type=int, default=5)
 
-    # Vault subcommands
-    vault_sub = sub.add_parser("vault")
+    # ── Vault subcommands ──
+    vault_sub = sub.add_parser("vault", help="Vault operations")
     vault_cmds = vault_sub.add_subparsers(dest="vault_command")
 
     vault_cmds.add_parser("stats")
@@ -396,8 +355,8 @@ def main():
     p = vault_cmds.add_parser("process")
     p.add_argument("text")
 
-    # Corrections subcommands
-    corr_sub = sub.add_parser("corrections")
+    # ── Corrections subcommands ──
+    corr_sub = sub.add_parser("corrections", help="Correction management")
     corr_cmds = corr_sub.add_subparsers(dest="corr_command")
 
     corr_cmds.add_parser("stats")
@@ -405,32 +364,33 @@ def main():
     p = corr_cmds.add_parser("export")
     p.add_argument("--output", default="corrections.jsonl")
 
-    # Pipeline subcommands
-    pipe_sub = sub.add_parser("pipeline")
+    # ── Pipeline subcommands ──
+    pipe_sub = sub.add_parser("pipeline", help="End-to-end pipeline")
     pipe_sub.add_argument("text")
-    pipe_sub.add_argument("--interactive", action="store_true")
 
     args = parser.parse_args()
 
     # Dispatch
-    if args.command == "brain":
-        {
-            "understand": cmd_brain_understand,
-            "interactive": cmd_brain_interactive,
-        }[args.brain_command](args)
-    elif args.command == "vault":
-        {
-            "stats": cmd_vault_stats,
-            "search": cmd_vault_search,
-            "health": cmd_vault_health,
-        }[args.vault_command](args)
-    elif args.command == "corrections":
-        {
-            "stats": cmd_corrections_stats,
-            "export": cmd_corrections_export,
-        }[args.corr_command](args)
-    elif args.command == "pipeline":
-        cmd_pipeline(args)
+    dispatch = {
+        ("brain", "understand"): cmd_brain_understand,
+        ("brain", "interactive"): cmd_brain_interactive,
+        ("brain", "evaluate"): cmd_brain_evaluate,
+        ("brain", "retrain"): cmd_brain_retrain,
+        ("vault", "stats"): cmd_vault_stats,
+        ("vault", "search"): cmd_vault_search,
+        ("vault", "health"): cmd_vault_health,
+        ("vault", "process"): cmd_vault_process,
+        ("corrections", "stats"): cmd_corrections_stats,
+        ("corrections", "export"): cmd_corrections_export,
+        ("pipeline", None): cmd_pipeline,
+    }
+
+    key = (args.command, getattr(args, "brain_command", None) or getattr(args, "vault_command", None) or getattr(args, "corr_command", None))
+    handler = dispatch.get(key)
+    if handler:
+        handler(args)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
@@ -439,7 +399,7 @@ if __name__ == "__main__":
 
 ---
 
-### Step 5: Enhance `vault/__init__.py`
+### Step 4: Enhance `vault/__init__.py`
 
 ```python
 from vault.config import VAULT_ROOT, INDEX_DIR, EMBEDDING_DIM, VAULT_VERSION
@@ -457,7 +417,7 @@ __all__ = [
 
 ---
 
-### Step 6: Tests
+### Step 5: Tests
 
 #### `vault/tests/test_corrections.py`
 ```python
@@ -483,26 +443,21 @@ class TestCorrectionIntegration:
 
 ## Integration Point
 
-At merge time, `transcribe.py` wires:
+At merge time, `transcribe.py` wires the interactive mode. Instance B does NOT touch transcribe.py — the merge handler combines both instances' work:
 
 ```python
-# transcribe.py — interactive mode
-if args.interactive and brain_engine and vault_pipeline:
-    corrected, modified = vault_pipeline.process_with_correction(
-        understanding, interactive=True
-    )
-    if modified:
-        print("[Vault] Correction logged")
-```
+# transcribe.py — wired during merge
+if args.interactive and brain_engine and understanding:
+    # Brain side: interactive correction (Instance A)
+    from brain.interactive import InteractiveCorrector
+    corrector = InteractiveCorrector(correction_logger)
+    corrected, modified = corrector.present_and_correct(transcription, understanding)
 
-And the unified CLI becomes the single entry point:
-
-```bash
-# One CLI to rule them all
-python scripts/unified_cli.py brain understand "Fix the VAD"
-python scripts/unified_cli.py vault search "what projects?"
-python scripts/unified_cli.py pipeline --interactive "Meeting with Sarah"
-python scripts/unified_cli.py corrections stats
+    # Vault side: store correction + write note (Instance B)
+    if vault_pipeline:
+        path, was_corrected = vault_pipeline.process_with_correction(
+            understanding, corrected=corrected if modified else None
+        )
 ```
 
 ---
@@ -512,7 +467,6 @@ python scripts/unified_cli.py corrections stats
 ```
 feat(vault): add correction vault storage
 feat(vault): enhance pipeline with correction support
-feat(vault): add interactive mode to transcribe.py
 feat(vault): add unified brain + vault CLI
 feat(vault): add correction exports and stats
 test(vault): add correction and integration tests

@@ -2,34 +2,29 @@
 
 ## Your Mission (Phase 4)
 
-Build the interactive correction system and knowledge distillation pipeline. The brain learns from user feedback and improves over time. You also build a standalone CLI so Instance B's scripts can use the brain directly.
+Build the interactive correction system and knowledge distillation pipeline. The brain learns from user feedback and improves over time. Enhance the brain CLI with new commands.
 
 **You are the brain. You learn. You improve. You get smarter every day.**
 
 ## Rules
 
-1. **DO NOT** touch `vault/`, `transcribe.py`, or any voiceassist module
-2. **DO NOT** modify `brain_contract.py`
+1. **DO NOT** touch `vault/`, `transcribe.py`, `scripts/unified_cli.py`, or any voiceassist module
+2. **DO NOT** modify `brain_contract.py` (FROZEN)
 3. **DO** import from `brain_contract.py` for shared types
 4. **DO** write tests for every new module
 5. **DO** handle errors gracefully — corrections should never crash the system
+6. **DO** keep all imports within `brain/` — no cross-boundary imports
 
-## File Ownership
+## File Ownership (STRICT)
 
-### Instance B owns (ONLY touches these):
+### Instance A owns (ONLY touches these):
 ```
 brain/interactive.py      # NEW: interactive correction loop
 brain/distill.py          # NEW: knowledge distillation (LLM → NN)
-brain/correct.py          # ENHANCE: correction buffer management
 brain/evaluate.py         # NEW: model evaluation metrics
+brain/correct.py          # ENHANCE: add get_stats(), export_training_data(), import_training_data()
 brain/tests/              # NEW tests
-scripts/brain_cli.py      # NEW: standalone brain CLI
-```
-
-### Shared (both instances touch during integration):
-```
-brain_contract.py         # FROZEN
-requirements.txt          # add new deps
+scripts/brain_cli.py      # ENHANCE: add evaluate, corrections, retrain commands
 ```
 
 ### OFF LIMITS:
@@ -37,6 +32,7 @@ requirements.txt          # add new deps
 vault/                    # Instance B owns
 transcribe.py             # Modified during merge only
 brain_contract.py         # FROZEN
+scripts/unified_cli.py    # Instance B owns
 ```
 
 ---
@@ -263,7 +259,7 @@ class BrainEvaluator:
                     "entity_f1": 0.71,
                     "topic_f1": 0.65,
                 },
-                "confusion_matrix": {...},  # for type classification
+                "confusion_matrix": {...},
                 "per_type_accuracy": {...},
                 "total_samples": 1000,
                 "avg_confidence": 0.78,
@@ -307,13 +303,13 @@ class BrainEvaluator:
 
 ---
 
-### Step 4: `brain/correct.py` — Enhancement
+### Step 4: Enhance `brain/correct.py`
 
 **Add to existing CorrectionLogger:**
 
 ```python
 class CorrectionLogger:
-    # ... existing methods ...
+    # ... existing methods (log, get_training_data, should_retrain, etc.) ...
 
     def get_stats(self) -> Dict[str, Any]:
         """Detailed correction statistics.
@@ -332,35 +328,23 @@ class CorrectionLogger:
         ...
 
     def export_training_data(self, path: str) -> int:
-        """Export corrections as JSONL for external training."""
+        """Export corrections as JSONL for external training.
+        Returns number of corrections exported."""
         ...
 
     def import_training_data(self, path: str) -> int:
-        """Import corrections from JSONL."""
+        """Import corrections from JSONL.
+        Returns number of corrections imported."""
         ...
 ```
 
 ---
 
-### Step 5: `scripts/brain_cli.py` — Standalone Brain CLI
+### Step 5: Enhance `scripts/brain_cli.py`
 
-**Purpose:** CLI tool for Instance B's scripts and direct brain usage.
-
-**Interface:**
+**Add new commands to existing CLI:**
 
 ```bash
-# Quick inference
-python scripts/brain_cli.py understand "I need to fix the VAD threshold"
-
-# JSON output
-python scripts/brain_cli.py understand "TODO: fix the VAD" --json
-
-# Interactive correction mode
-python scripts/brain_cli.py interactive
-
-# Batch processing
-python scripts/brain_cli.py batch input.json --output results.json
-
 # Evaluate model
 python scripts/brain_cli.py evaluate --test-data data/test.json
 
@@ -374,79 +358,14 @@ python scripts/brain_cli.py corrections --export corrections.jsonl
 python scripts/brain_cli.py retrain --epochs 5
 ```
 
-**Implementation:**
+**Implementation — add these handler functions:**
 
 ```python
-#!/usr/bin/env python3
-"""Standalone brain CLI for inference, correction, and evaluation."""
-
-import argparse
-import json
-import sys
-
-from brain.understand import BrainEngine
-from brain.correct import CorrectionLogger
-from brain.interactive import InteractiveCorrector
-from brain.evaluate import BrainEvaluator
-
-
-def cmd_understand(args):
-    """Run brain inference on text."""
-    engine = BrainEngine.load(args.checkpoint)
-    u = engine.understand(args.text)
-    if args.json:
-        print(json.dumps(u.to_dict(), indent=2))
-    else:
-        print(f"Type:        {u.type.value}")
-        print(f"Priority:    {u.priority:.2f}")
-        print(f"Urgency:     {u.urgency.value}")
-        print(f"Sentiment:   {u.sentiment.value}")
-        print(f"Action:      {u.action or 'none'}")
-        print(f"Entities:    {[(e.name, e.entity_type.value) for e in u.entities]}")
-        print(f"Topics:      {u.topics}")
-        print(f"Confidence:  {u.confidence:.2f}")
-
-
-def cmd_interactive(args):
-    """Interactive correction loop."""
-    engine = BrainEngine.load(args.checkpoint)
-    logger = CorrectionLogger()
-    corrector = InteractiveCorrector(logger)
-
-    print("Brain Interactive Mode (type 'quit' to exit)")
-    while True:
-        text = input("\n> ").strip()
-        if text.lower() in ("quit", "exit", "q"):
-            break
-        if not text:
-            continue
-
-        u = engine.understand(text)
-        corrected, modified = corrector.present_and_correct(text, u)
-        if modified:
-            print(f"[Saved] {corrected.type.value}: {corrected.action or corrected.text[:60]}")
-        else:
-            print("[Skipped]")
-
-
-def cmd_batch(args):
-    """Batch processing."""
-    engine = BrainEngine.load(args.checkpoint)
-    with open(args.input) as f:
-        texts = json.load(f)
-
-    results = []
-    for text in texts:
-        u = engine.understand(text)
-        results.append(u.to_dict())
-
-    with open(args.output, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"Processed {len(results)} items → {args.output}")
-
-
 def cmd_evaluate(args):
-    """Evaluate model."""
+    """Evaluate model on test data."""
+    from brain.understand import BrainEngine
+    from brain.evaluate import BrainEvaluator
+
     engine = BrainEngine.load(args.checkpoint)
     evaluator = BrainEvaluator(engine.model, engine.tokenizer)
 
@@ -463,6 +382,7 @@ def cmd_evaluate(args):
 
 def cmd_corrections(args):
     """Manage corrections."""
+    from brain.correct import CorrectionLogger
     logger = CorrectionLogger()
     if args.stats:
         stats = logger.get_stats()
@@ -470,17 +390,16 @@ def cmd_corrections(args):
     elif args.export:
         count = logger.export_training_data(args.export)
         print(f"Exported {count} corrections")
-    elif args.import_file:
-        count = logger.import_training_data(args.import_file)
-        print(f"Imported {count} corrections")
 
 
 def cmd_retrain(args):
     """Retrain from corrections."""
+    from brain.understand import BrainEngine
     from brain.distill import DistillationPipeline
+    from brain.correct import CorrectionLogger
+
     engine = BrainEngine.load(args.checkpoint)
     logger = CorrectionLogger()
-    # Minimal distillation for retraining
     distiller = DistillationPipeline(engine, llm=None, correction_logger=logger)
     if distiller.should_retrain():
         metrics = distiller.retrain(epochs=args.epochs)
@@ -489,58 +408,26 @@ def cmd_retrain(args):
         print("Model retrained and saved.")
     else:
         print("Not enough corrections for retraining.")
+```
 
+**Add subparsers in main():**
 
-def main():
-    parser = argparse.ArgumentParser(description="Brain CLI")
-    sub = parser.add_subparsers(dest="command")
+```python
+# evaluate
+p_evaluate = subparsers.add_parser("evaluate")
+p_evaluate.add_argument("--test-data", required=True)
+p_evaluate.add_argument("--output")
+p_evaluate.add_argument("--checkpoint", default="checkpoints/brain")
 
-    # understand
-    p = sub.add_parser("understand")
-    p.add_argument("text")
-    p.add_argument("--json", action="store_true")
-    p.add_argument("--checkpoint", default="checkpoints/brain")
+# corrections
+p_corrections = subparsers.add_parser("corrections")
+p_corrections.add_argument("--stats", action="store_true")
+p_corrections.add_argument("--export")
 
-    # interactive
-    p = sub.add_parser("interactive")
-    p.add_argument("--checkpoint", default="checkpoints/brain")
-
-    # batch
-    p = sub.add_parser("batch")
-    p.add_argument("input")
-    p.add_argument("--output", default="results.json")
-    p.add_argument("--checkpoint", default="checkpoints/brain")
-
-    # evaluate
-    p = sub.add_parser("evaluate")
-    p.add_argument("--test-data", required=True)
-    p.add_argument("--output")
-    p.add_argument("--checkpoint", default="checkpoints/brain")
-
-    # corrections
-    p = sub.add_parser("corrections")
-    p.add_argument("--stats", action="store_true")
-    p.add_argument("--export")
-    p.add_argument("--import-file", dest="import_file")
-
-    # retrain
-    p = sub.add_parser("retrain")
-    p.add_argument("--epochs", type=int, default=5)
-    p.add_argument("--checkpoint", default="checkpoints/brain")
-
-    args = parser.parse_args()
-    {
-        "understand": cmd_understand,
-        "interactive": cmd_interactive,
-        "batch": cmd_batch,
-        "evaluate": cmd_evaluate,
-        "corrections": cmd_corrections,
-        "retrain": cmd_retrain,
-    }[args.command](args)
-
-
-if __name__ == "__main__":
-    main()
+# retrain
+p_retrain = subparsers.add_parser("retrain")
+p_retrain.add_argument("--epochs", type=int, default=5)
+p_retrain.add_argument("--checkpoint", default="checkpoints/brain")
 ```
 
 ---
@@ -576,26 +463,6 @@ class TestBrainEvaluator:
 
 ---
 
-## Integration Point
-
-Instance B's `transcribe.py` will call:
-
-```python
-# In transcribe.py — interactive mode
-from brain.interactive import InteractiveCorrector
-from brain.correct import CorrectionLogger
-
-corrector = InteractiveCorrector(CorrectionLogger())
-corrected, modified = corrector.present_and_correct(text, understanding)
-if modified:
-    # Log correction for retraining
-    pass
-```
-
-And Instance B's `scripts/brain_cli.py` will be the unified CLI that both instances use.
-
----
-
 ## Commit Messages
 
 ```
@@ -603,6 +470,6 @@ feat(brain): add interactive correction loop
 feat(brain): add knowledge distillation pipeline
 feat(brain): add model evaluation metrics
 feat(brain): enhance correction buffer with stats and export
-feat(brain): add standalone brain CLI
+feat(brain): add evaluate, corrections, retrain commands to brain CLI
 test(brain): add interactive, distillation, and evaluation tests
 ```
