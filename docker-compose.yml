@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  vault:
+    build: .
+    container_name: second-brain-vault
+    ports:
+      - "8000:8000"
+    volumes:
+      - vault_data:/app/vault_data
+      - checkpoints:/app/checkpoints
+    environment:
+      - VAULT_PATH=/app/vault_data
+      - LOG_LEVEL=INFO
+      - VAULT_API_KEY=${VAULT_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  vault_data:
+  checkpoints:
