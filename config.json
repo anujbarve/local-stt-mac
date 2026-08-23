@@ -1,0 +1,9 @@
+{
+  "hotkey": "alt_r",
+  "wake_word": null,
+  "model": "base",
+  "tts": true,
+  "tts_voice": "bruno",
+  "threshold": 0.45,
+  "silence": 1.5
+}
