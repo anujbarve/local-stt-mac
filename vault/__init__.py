@@ -31,6 +31,8 @@ from vault.backup import VaultBackup
 from vault.observability import StructuredLogger, MetricsCollector
 from vault.migration import SchemaMigrator
 from vault.notifications import NotificationManager
+from vault.security import InputSanitizer, RateLimiter, APIKeyAuth
+from vault.resilience import CircuitBreaker, RetryPolicy, HealthAggregator
 
 __version__ = VAULT_VERSION
 __all__ = [
@@ -38,4 +40,6 @@ __all__ = [
     "VaultPipeline", "VaultReader", "VaultSearch", "CorrectionVault",
     "VaultBackup", "StructuredLogger", "MetricsCollector",
     "SchemaMigrator", "NotificationManager",
+    "InputSanitizer", "RateLimiter", "APIKeyAuth",
+    "CircuitBreaker", "RetryPolicy", "HealthAggregator",
 ]
