@@ -165,6 +165,114 @@ class CorrectionLogger:
 
         return True
 
+    def interactive_correct(
+        self,
+        text: str,
+        understanding: "Understanding",
+    ) -> Optional["Understanding"]:
+        """Interactive correction flow.
+
+        Shows understanding to user, lets them correct fields.
+        Returns corrected Understanding or None if user skips.
+        """
+        from brain_contract import NoteType, Urgency, Sentiment
+
+        print(f"\n{'='*50}")
+        print(f"Text: {text}")
+        print(f"Type: {understanding.type.value} | Priority: {understanding.priority:.2f}")
+        print(f"Urgency: {understanding.urgency.value} | Sentiment: {understanding.sentiment.value}")
+        if understanding.entities:
+            print(f"Entities: {[(e.name, e.entity_type.value) for e in understanding.entities]}")
+        print(f"{'='*50}")
+
+        response = input("Correct? [Y/n]: ").strip().lower()
+        if response == "n":
+            return None
+
+        # Build corrected understanding
+        corrected = Understanding(
+            text=understanding.text,
+            timestamp=understanding.timestamp,
+            type=understanding.type,
+            priority=understanding.priority,
+            urgency=understanding.urgency,
+            sentiment=understanding.sentiment,
+            entities=list(understanding.entities),
+            action=understanding.action,
+            summary=understanding.summary,
+            topics=list(understanding.topics),
+            tags=list(understanding.tags),
+            embedding=understanding.embedding,
+            temporal=understanding.temporal,
+        )
+
+        corrections = {}
+
+        # Edit type
+        new_type = input(f"Type [{understanding.type.value}]: ").strip()
+        if new_type:
+            try:
+                corrected.type = NoteType(new_type)
+                corrections["type"] = new_type
+            except ValueError:
+                print(f"  Invalid type.")
+
+        # Edit priority
+        new_pri = input(f"Priority [{understanding.priority:.2f}]: ").strip()
+        if new_pri:
+            try:
+                corrected.priority = float(new_pri)
+                corrections["priority"] = float(new_pri)
+            except ValueError:
+                print("  Invalid number.")
+
+        # Create and log correction
+        if corrections:
+            correction = Correction(
+                text=text,
+                predicted=understanding,
+                corrected=corrected,
+            )
+            self.log(correction)
+            print(f"  Logged correction ({self.stats()['unapplied']} pending)")
+
+        return corrected
+
+    def batch_correct(
+        self,
+        corrections: List[Dict],
+    ) -> int:
+        """Process a batch of corrections from a list of dicts.
+
+        Each dict should have: text, type, priority, urgency, sentiment.
+        Returns number of corrections applied.
+        """
+        from brain_contract import Understanding, NoteType, Urgency, Sentiment, Correction
+        count = 0
+        for item in corrections:
+            predicted = Understanding(
+                text=item["text"],
+                type=NoteType.OBSERVATION,
+                priority=0.5,
+                urgency=Urgency.LATER,
+                sentiment=Sentiment.NEUTRAL,
+            )
+            corrected = Understanding(
+                text=item["text"],
+                type=NoteType(item.get("type", "observation")),
+                priority=float(item.get("priority", 0.5)),
+                urgency=Urgency(item.get("urgency", "later")),
+                sentiment=Sentiment(item.get("sentiment", "neutral")),
+            )
+            correction = Correction(
+                text=item["text"],
+                predicted=predicted,
+                corrected=corrected,
+            )
+            self.log(correction)
+            count += 1
+        return count
+
     def _load_buffer(self) -> None:
         """Load corrections from JSONL file."""
         if not os.path.exists(self.buffer_path):

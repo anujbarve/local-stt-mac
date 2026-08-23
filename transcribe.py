@@ -26,6 +26,14 @@ from wakeword import (
     list_available_wakewords,
 )
 
+# Vault integration (optional — graceful fallback if not installed)
+try:
+    from vault.pipeline import VaultPipeline
+    from vault.config import VAULT_ROOT
+    HAS_VAULT = True
+except ImportError:
+    HAS_VAULT = False
+
 
 CONFIG_FILE = "config.json"
 
@@ -150,6 +158,33 @@ def parse_arguments(args=None) -> argparse.Namespace:
         action="store_true",
         help="Enable verbose / debug output",
     )
+    parser.add_argument(
+        "--brain",
+        action="store_true",
+        help="Enable brain understanding (classify, extract entities, determine priority)",
+    )
+    parser.add_argument(
+        "--vault",
+        action="store_true",
+        help="Enable vault writing (requires --brain)",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Enable interactive correction after understanding",
+    )
+    parser.add_argument(
+        "--brain-checkpoint",
+        type=str,
+        default="checkpoints/brain",
+        help="Brain model checkpoint directory",
+    )
+    parser.add_argument(
+        "--vault-path",
+        type=str,
+        default=os.getenv("VAULT_PATH", "vault"),
+        help="Vault root directory",
+    )
     parsed = parser.parse_args(args)
 
     if parsed.enable_wake_word and not parsed.wake_word:
@@ -231,7 +266,36 @@ def run_pipeline(args: argparse.Namespace) -> int:
         print("Error: Both hotkey and wake-word are disabled. Enable at least one trigger method.", file=sys.stderr)
         return 1
 
-    # 5. Initialize KittenTTS Engine (Rosie voice)
+    # 5. Initialize Brain + Vault (if enabled)
+    # 5. Initialize Brain Engine (if --brain enabled)
+    brain_engine = None
+    correction_logger = None
+    if args.brain:
+        try:
+            if args.verbose:
+                print(f"[Debug] Initializing Brain Engine: {args.brain_checkpoint}")
+            from brain.understand import BrainEngine
+            from brain.correct import CorrectionLogger
+            brain_engine = BrainEngine.load(args.brain_checkpoint)
+            correction_logger = CorrectionLogger()
+        except Exception as e:
+            print(f"[Warning] Brain initialization failed: {e}. Continuing without brain.", file=sys.stderr)
+            brain_engine = None
+
+    # 6. Initialize Vault Pipeline (if --vault enabled)
+    vault_pipeline = None
+    if args.vault and HAS_VAULT:
+        try:
+            if args.verbose:
+                print(f"[Debug] Initializing Vault Pipeline: {args.vault_path}")
+            vault_pipeline = VaultPipeline(vault_root=args.vault_path)
+        except Exception as e:
+            print(f"[Warning] Vault initialization failed: {e}. Continuing without vault.", file=sys.stderr)
+            vault_pipeline = None
+    elif args.vault and not HAS_VAULT:
+        print("[Warning] vault module not available. Vault writing disabled.", file=sys.stderr)
+
+    # 7. Initialize KittenTTS Engine (Rosie voice)
     tts_engine = None
     if enable_tts:
         try:
@@ -241,7 +305,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"[Warning] KittenTTS initialization failed: {e}. Continuing without TTS reply.", file=sys.stderr)
 
-    # 6. Start Microphone Stream
+    # 8. Start Microphone Stream
     try:
         audio_stream = AudioStream(
             sample_rate=SAMPLE_RATE,
@@ -355,7 +419,52 @@ def run_pipeline(args: argparse.Namespace) -> int:
                     print(f"\n{transcription}\n")
                     sys.stdout.flush()
 
-                    # State 5: KittenTTS voice reply (Rosie voice)
+                    # State 5a: Brain understanding + vault writing
+                    understanding = None
+                    if brain_engine:
+                        try:
+                            understanding = brain_engine.understand(transcription)
+                            if args.verbose:
+                                print(f"[Brain] {brain_engine.explain(understanding)}")
+
+                            # If brain is uncertain, route to LLM
+                            if brain_engine.should_call_llm(understanding) and vault_pipeline:
+                                print("[Brain] Low confidence — routing to LLM...")
+                                try:
+                                    from vault.llm import LocalLLM
+                                    llm = LocalLLM()
+                                    if llm.is_available:
+                                        understanding = llm.analyze(transcription)
+                                except Exception as e:
+                                    if args.verbose:
+                                        print(f"[Debug] LLM fallback failed: {e}", file=sys.stderr)
+
+                            # Interactive correction
+                            if args.interactive and correction_logger and understanding:
+                                corrected = correction_logger.interactive_correct(transcription, understanding)
+                                if corrected:
+                                    understanding = corrected
+
+                            # Print understanding summary
+                            if not args.verbose and understanding:
+                                print(f"  Type: {understanding.type.value} | Priority: {understanding.priority:.2f}")
+                        except Exception as e:
+                            if args.verbose:
+                                print(f"[Debug] Brain error: {e}", file=sys.stderr)
+
+                    # Write to vault
+                    if vault_pipeline and understanding:
+                        try:
+                            file_path = vault_pipeline.process_safe(understanding)
+                            if file_path:
+                                print(f"[Vault] Saved: {file_path}")
+                            else:
+                                print("[Vault] Write failed (see logs)")
+                        except Exception as e:
+                            if args.verbose:
+                                print(f"[Debug] Vault error: {e}", file=sys.stderr)
+
+                    # State 5b: KittenTTS voice reply (Rosie voice)
                     if tts_engine:
                         try:
                             tts_engine.speak(transcription, wait=True)

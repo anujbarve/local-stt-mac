@@ -54,6 +54,27 @@ AUTO_LINK_MAX_DISTANCE = 3        # max graph hops for link suggestions
 DAILY_DIR = os.path.join(VAULT_ROOT, "daily")
 
 # ---------------------------------------------------------------------------
+# Integration
+# ---------------------------------------------------------------------------
+BRAIN_CHECKPOINT_DIR = os.getenv(
+    "BRAIN_CHECKPOINT",
+    os.path.join(os.getcwd(), "checkpoints", "brain"),
+)
+
+# ---------------------------------------------------------------------------
+# Production
+# ---------------------------------------------------------------------------
+DRY_RUN = os.getenv("VAULT_DRY_RUN", "false").lower() == "true"
+BACKUP_ENABLED = True
+BACKUP_DIR = os.path.join(VAULT_ROOT, "_backups")
+ATOMIC_WRITES = True
+
+# ---------------------------------------------------------------------------
+# Version
+# ---------------------------------------------------------------------------
+VAULT_VERSION = "0.2.0"
+
+# ---------------------------------------------------------------------------
 # Back-compat alias (some modules may reference this directly)
 # ---------------------------------------------------------------------------
 INDEX_PATH = INDEX_DIR

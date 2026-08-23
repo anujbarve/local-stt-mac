@@ -91,3 +91,31 @@ CHECKPOINT_EVERY = 5         # save every N epochs
 
 LLM_CONFIDENCE_THRESHOLD = 0.70   # below this, route to LLM
 HIGH_CONFIDENCE_THRESHOLD = 0.90  # above this, NN handles alone
+
+# =============================================================================
+# Integration
+# =============================================================================
+
+DEFAULT_VAULT_PATH = "vault/"
+DEFAULT_INDEX_PATH = "vault_index/"
+DEFAULT_CHECKPOINT_DIR = "checkpoints/brain"
+
+# LLM fallback
+LLM_FALLBACK_ENABLED = True
+LLM_MIN_CONFIDENCE = 0.50     # below this, ALWAYS use LLM
+LLM_MAX_CONFIDENCE = 0.90     # above this, NEVER use LLM
+
+# Correction
+CORRECTION_BUFFER_PATH = "checkpoints/brain/corrections.jsonl"
+CORRECTION_MIN_FOR_RETRAIN = 20
+CORRECTION_HEAD_ONLY = True
+
+# Pipeline
+PIPELINE_WRITE_ENABLED = True
+PIPELINE_INDEX_ENABLED = True
+PIPELINE_LINK_ENABLED = True
+
+# Logging
+import os as _os
+LOG_LEVEL = _os.getenv("LOG_LEVEL", "INFO")
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
