@@ -228,6 +228,122 @@ class BrainEngine:
         # Return top 5 with score > 0.5
         return [nid for nid, score in scored[:5] if score > 0.5]
 
+    def explain(self, understanding: Understanding) -> str:
+        """Generate a human-readable explanation of the understanding."""
+        lines = []
+        lines.append(f"Type: {understanding.type.value}")
+        lines.append(f"Priority: {understanding.priority:.2f}")
+        lines.append(f"Urgency: {understanding.urgency.value}")
+        lines.append(f"Sentiment: {understanding.sentiment.value}")
+        lines.append(f"Confidence: {understanding.confidence:.0%}")
+
+        if understanding.entities:
+            ent_strs = [f"{e.name} ({e.entity_type.value})" for e in understanding.entities]
+            lines.append(f"Entities: {', '.join(ent_strs)}")
+
+        if understanding.action:
+            lines.append(f"Action: {understanding.action}")
+
+        if understanding.topics:
+            lines.append(f"Topics: {', '.join(understanding.topics)}")
+
+        if understanding.summary:
+            lines.append(f"Summary: {understanding.summary}")
+
+        return " | ".join(lines)
+
+    def suggest_correction(
+        self,
+        text: str,
+        understanding: Understanding,
+    ) -> Dict[str, Any]:
+        """Present understanding to user and ask for corrections.
+
+        Returns dict with:
+            - accepted: bool
+            - corrections: dict of changed fields
+            - corrected: Understanding (if corrections made)
+        """
+        print(f"\n{'='*50}")
+        print(f"Text: {text}")
+        print(f"{'='*50}")
+        print(self.explain(understanding))
+        print(f"{'='*50}")
+
+        response = input("\nAccept? [Y/n/edit]: ").strip().lower()
+
+        if response == "n":
+            return {"accepted": False, "corrections": {}, "corrected": None}
+
+        if response == "edit":
+            return self._interactive_edit(text, understanding)
+
+        return {"accepted": True, "corrections": {}, "corrected": understanding}
+
+    def _interactive_edit(
+        self,
+        text: str,
+        understanding: Understanding,
+    ) -> Dict[str, Any]:
+        """Interactive field editing."""
+        from brain_contract import NoteType, Urgency, Sentiment
+
+        corrected = Understanding(
+            text=understanding.text,
+            timestamp=understanding.timestamp,
+            type=understanding.type,
+            priority=understanding.priority,
+            urgency=understanding.urgency,
+            sentiment=understanding.sentiment,
+            entities=list(understanding.entities),
+            action=understanding.action,
+            summary=understanding.summary,
+            topics=list(understanding.topics),
+            tags=list(understanding.tags),
+            embedding=understanding.embedding,
+            temporal=understanding.temporal,
+        )
+
+        corrections = {}
+
+        # Edit type
+        print(f"\nCurrent type: {corrected.type.value}")
+        print(f"Options: {', '.join(t.value for t in NoteType)}")
+        new_type = input("New type (Enter to keep): ").strip()
+        if new_type:
+            try:
+                corrected.type = NoteType(new_type)
+                corrections["type"] = new_type
+            except ValueError:
+                print(f"  Invalid type '{new_type}', keeping original.")
+
+        # Edit priority
+        print(f"\nCurrent priority: {corrected.priority:.2f}")
+        new_pri = input("New priority 0.0-1.0 (Enter to keep): ").strip()
+        if new_pri:
+            try:
+                corrected.priority = float(new_pri)
+                corrections["priority"] = float(new_pri)
+            except ValueError:
+                print("  Invalid number, keeping original.")
+
+        # Edit urgency
+        print(f"\nCurrent urgency: {corrected.urgency.value}")
+        print(f"Options: {', '.join(u.value for u in Urgency)}")
+        new_urg = input("New urgency (Enter to keep): ").strip()
+        if new_urg:
+            try:
+                corrected.urgency = Urgency(new_urg)
+                corrections["urgency"] = new_urg
+            except ValueError:
+                print(f"  Invalid urgency '{new_urg}', keeping original.")
+
+        return {
+            "accepted": bool(corrections),
+            "corrections": corrections,
+            "corrected": corrected,
+        }
+
     def _decode_outputs(
         self, text: str, outputs: Dict[str, torch.Tensor]
     ) -> Understanding:
