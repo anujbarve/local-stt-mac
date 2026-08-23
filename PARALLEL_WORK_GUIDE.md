@@ -402,15 +402,137 @@ Week 15 (merge):
   Both: CLI + error handling
 ```
 
-### Phase 2 Commit Checklist
+### Phase 2 Complete ✅
 
-Before starting Phase 2, both instances should:
+Brain enhancements (MetricsTracker, LR scheduling, CLI) and Vault retrieval (reader, index, search, graph, moc, query, llm, answer, pipeline, linker) merged to main.
+258 tests passing. Zero conflicts.
 
-- [ ] Read `INSTANCE_A_PLAN.md` or `INSTANCE_B_PLAN.md` completely
-- [ ] Read the existing modules in your directory (understand current code)
-- [ ] Create your branch: `feat/brain-training` or `feat/vault-retrieval`
-- [ ] Verify all Phase 1 tests pass: `python -m pytest brain/tests/ vault/tests/ -v`
+---
+
+## Phase 3: Integration & Production Hardening
+
+### New Plan Files
+
+- **`INSTANCE_A_PHASE3.md`** — Integration, correction UI, unified CLI, LLM fallback
+- **`INSTANCE_B_PHASE3.md`** — Vault pipeline hardening, documentation, error handling
+
+### New File Ownership (Phase 3)
+
+**Instance A adds:**
+```
+brain/config.py              # ENHANCE: add integration constants
+brain/understand.py          # ENHANCE: add explain(), suggest_correction()
+brain/correct.py             # ENHANCE: add interactive correction mode
+scripts/brain_cli.py         # NEW: unified brain CLI
+tests/test_integration.py    # NEW: end-to-end integration tests
+transcribe.py                # SHARED: add brain wiring (coordinate with B)
+```
+
+**Instance B adds:**
+```
+vault/config.py              # ENHANCE: add integration constants
+vault/pipeline.py            # ENHANCE: process_safe, dry_run, health_check
+vault/writer.py              # ENHANCE: atomic writes, backup
+vault/__init__.py            # ENHANCE: version, public API exports
+docs/README.md               # NEW: project documentation
+docs/USAGE.md                # NEW: usage guide
+docs/ARCHITECTURE.md         # NEW: architecture documentation
+tests/test_vault_integration.py # NEW: vault integration tests
+vault/tests/test_pipeline_enhanced.py # NEW: enhanced pipeline tests
+transcribe.py                # SHARED: add vault wiring (coordinate with A)
+```
+
+### Phase 3 Branches
+
+```bash
+feat/brain-integration    # Instance A
+feat/vault-polish         # Instance B
+```
+
+### Phase 3 Timeline
+
+```
+Week 16 (parallel):
+  Instance A: config + understand.py enhance + correct.py enhance
+  Instance B: config + pipeline.py enhance + writer.py enhance
+
+Week 17 (parallel):
+  Instance A: scripts/brain_cli.py
+  Instance B: docs/README.md + docs/USAGE.md + docs/ARCHITECTURE.md
+
+Week 18 (parallel):
+  Instance A: transcribe.py brain wiring + error handling
+  Instance B: transcribe.py vault wiring + error handling
+
+Week 19 (parallel):
+  Instance A: integration tests
+  Instance B: vault integration tests + pipeline tests
+
+Week 20 (merge + ship):
+  Both: Merge to main
+  Both: Final end-to-end testing
+  Both: Clean up, tag release
+```
+
+### Key Integration Point: transcribe.py
+
+Both instances modify transcribe.py — coordinate via separate sections:
+
+**Instance A adds (imports at top):**
+```python
+from brain.understand import BrainEngine
+from brain.correct import CorrectionLogger
+```
+
+**Instance B adds (imports at top):**
+```python
+from vault.pipeline import VaultPipeline
+from vault.config import VAULT_ROOT
+```
+
+**Instance A adds (initialization in run_pipeline):**
+```python
+brain_engine = None
+if args.brain:
+    brain_engine = BrainEngine.load(args.brain_checkpoint)
+
+correction_logger = CorrectionLogger()
+```
+
+**Instance B adds (initialization in run_pipeline):**
+```python
+vault_pipeline = None
+if args.vault:
+    vault_pipeline = VaultPipeline(vault_root=args.vault_path)
+```
+
+**Instance A adds (after transcription):**
+```python
+if brain_engine:
+    understanding = brain_engine.understand(transcription)
+    if args.interactive:
+        corrected = correction_logger.interactive_correct(transcription, understanding)
+        if corrected:
+            understanding = corrected
+```
+
+**Instance B adds (after understanding):**
+```python
+if vault_pipeline and understanding:
+    file_path = vault_pipeline.process_safe(understanding)
+    if file_path:
+        print(f"[Vault] Saved: {file_path}")
+```
+
+### Phase 3 Commit Checklist
+
+Before starting Phase 3, both instances should:
+
+- [ ] Read `INSTANCE_A_PHASE3.md` or `INSTANCE_B_PHASE3.md` completely
+- [ ] Create your branch: `feat/brain-integration` or `feat/vault-polish`
+- [ ] Verify all Phase 2 tests pass: `python -m pytest brain/tests/ vault/tests/ -v`
 - [ ] Start building per your plan file
+- [ ] Coordinate transcribe.py changes (different sections, no conflicts)
 - [ ] Commit with conventional commit messages
 - [ ] Push to your branch
 
