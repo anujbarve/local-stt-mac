@@ -91,6 +91,30 @@ class VaultIndex:
             self._id_map.append(entry)
             self._embeddings.append(vec)
 
+    def add_batch(self, entries: List[Tuple[str, str, List[float]]]) -> int:
+        """Add multiple entries at once (faster than individual adds).
+
+        Args:
+            entries: List of (note_id, file_path, embedding) tuples.
+
+        Returns number of entries added.
+        """
+        if not entries:
+            return 0
+
+        if HAS_FAISS and self._index is not None:
+            vectors = np.array([e[2] for e in entries], dtype=np.float32)
+            self._index.add(vectors)
+            for note_id, file_path, _ in entries:
+                self._id_map.append({"note_id": note_id, "file_path": file_path, "removed": False})
+        else:
+            for note_id, file_path, embedding in entries:
+                vec = list(embedding)
+                self._id_map.append({"note_id": note_id, "file_path": file_path, "removed": False, "embedding": vec})
+                self._embeddings.append(vec)
+
+        return len(entries)
+
     def remove(self, note_id: str) -> bool:
         """Mark a note as removed.  Returns True if found."""
         for entry in self._id_map:
