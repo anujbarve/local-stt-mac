@@ -47,6 +47,18 @@ Microphone Audio (16kHz mono)
 
 ---
 
+## Second Brain (Optional)
+
+The repo also includes a local, voice-driven knowledge system built on the same pipeline. The `brain/` package understands what you say, and the `vault/` package stores and searches it.
+
+```bash
+python transcribe.py --brain --vault
+```
+
+See [docs/README.md](docs/README.md) for the architecture, API and deployment guides.
+
+---
+
 ## Installation
 
 ### Prerequisites
